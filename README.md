@@ -1,16 +1,113 @@
-# MCP 至 REST 通用网关服务器
+# MCP2REST
 
-本项目实现了一个通用的模型上下文协议（MCP）服务器，旨在作为 RESTful API 的通用网关。它无缝地连接了如 Claude 这类 AI 助手与任何现有的内部或外部 Web 服务，消除了为每个 API 进行定制化集成的需求。
+MCP2REST是一个通用网关服务器，用于将MCP（Model Control Protocol）工具调用转换为REST API请求。它允许AI模型通过简单的配置文件定义与各种REST API进行交互，无需为每个API编写专门的代码。
 
-该服务器作为一个**由配置驱动的适配器**运行。其核心功能是将传入的 MCP JSON-RPC 请求（特别是 `tools/call` 调用）转换为对下游 REST 端点的、配置完整的 HTTP 请求。它根据灵活的定义文件（如 YAML）处理参数映射、身份验证头注入和 URL 模板化。随后，它将原始 API 返回的 JSON 响应转换为 MCP 标准要求的结构化文本格式，再返回给 AI 客户端。
+## 特性
 
-这种方法为 AI 与 API 的交互提供了一个强大的统一接口，在治理、安全性和可维护性方面具有显著优势。它集中处理了身份验证、日志记录和速率限制，使其成为一个关键的基础设施组件，用于安全高效地释放企业能力，赋能下一代 AI 工作流。
+- 支持WebSocket和标准输入/输出两种通信模式
+- 通过YAML配置文件定义API端点
+- 支持多种身份验证方法（Bearer令牌、API密钥、基本身份验证、OAuth2）
+- 灵活的参数处理（路径、查询、请求体、头）
+- 强大的响应转换功能（直接、JQ表达式、模板）
+- 详细的错误处理和日志记录
 
+## 安装
 
-# MCP-to-REST Gateway Server
+```bash
+go get github.com/mcp2rest
+```
 
-This project implements a generic Model Context Protocol (MCP) server designed to function as a universal gateway for RESTful APIs. It seamlessly bridges the gap between AI assistants like Claude and any existing internal or external web service, eliminating the need for custom, per-API integrations.
+## 使用方法
 
-The server operates as a config-driven adapter. Its core function is to translate incoming MCP JSON-RPC requests—specifically `tools/call` invocations—into fully configured HTTP requests to downstream REST endpoints. It handles parameter mapping, authentication header injection, and URL templating based on a flexible definition file (e.g., YAML). Subsequently, it transforms the raw API JSON responses into the structured text format required by the MCP standard before returning them to the AI client.
+1. 创建配置文件（参见`examples/configs/example_config.yaml`）
+2. 启动服务器：
 
-This approach provides a powerful, unified interface for AI-to-API interaction, offering significant advantages in governance, security, and maintainability. It centralizes authentication, logging, and rate limiting, making it an essential infrastructure component for safely and efficiently unlocking enterprise capabilities for next-generation AI workflows.
+```bash
+mcp2rest --config path/to/config.yaml
+```
+
+## 配置文件格式
+
+配置文件使用YAML格式，包含以下主要部分：
+
+- `server`: 服务器配置（端口、主机、模式）
+- `global`: 全局设置（超时、最大请求大小、默认头）
+- `endpoints`: API端点定义列表
+
+每个端点定义包括：
+
+- `name`: 端点名称（用于MCP工具调用）
+- `description`: 端点描述
+- `method`: HTTP方法（GET、POST、PUT、DELETE等）
+- `url_template`: URL模板，支持参数替换
+- `authentication`: 身份验证配置
+- `parameters`: 参数定义列表
+- `response`: 响应处理配置
+
+## MCP请求格式
+
+MCP2REST接受以下格式的JSON-RPC请求：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "request-id",
+  "method": "toolCall",
+  "params": {
+    "name": "endpointName",
+    "parameters": {
+      "param1": "value1",
+      "param2": "value2"
+    }
+  }
+}
+```
+
+## 示例
+
+### 配置文件示例
+
+```yaml
+server:
+  port: 8080
+  host: "0.0.0.0"
+  mode: "websocket"
+
+endpoints:
+  - name: "getWeather"
+    method: "GET"
+    url_template: "https://api.weatherapi.com/v1/current.json"
+    authentication:
+      type: "api_key"
+      header_name: "X-API-Key"
+      key_env: "WEATHER_API_KEY"
+    parameters:
+      - name: "q"
+        required: true
+        in: "query"
+    response:
+      success_code: 200
+      transform:
+        type: "jq"
+        expression: "{ location: .location.name, temp_c: .current.temp_c }"
+```
+
+### MCP请求示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "123",
+  "method": "toolCall",
+  "params": {
+    "name": "getWeather",
+    "parameters": {
+      "q": "Beijing"
+    }
+  }
+}
+```
+
+## 许可证
+
+MIT
