@@ -167,7 +167,7 @@ func (s *Server) startStdioServer() error {
 	// 启动工作协程池
 	workerCount := 4 // 可以根据需要调整
 	for i := 0; i < workerCount; i++ {
-		go s.stdioWorker(requestChan, writer)
+		go s.stdioWorker(requestChan)
 	}
 	
 	// 启动读取协程
@@ -206,7 +206,6 @@ func (s *Server) startStdioServer() error {
 				// 创建请求任务
 				task := &requestTask{
 					data:   []byte(line),
-					writer: writer,
 				}
 				
 				// 发送到工作协程池
@@ -232,12 +231,11 @@ func (s *Server) startStdioServer() error {
 
 // requestTask 请求任务
 type requestTask struct {
-	data   []byte
-	writer *bufio.Writer
+	data []byte
 }
 
 // stdioWorker 标准输入/输出工作协程
-func (s *Server) stdioWorker(requestChan <-chan *requestTask, writer *bufio.Writer) {
+func (s *Server) stdioWorker(requestChan <-chan *requestTask) {
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -271,18 +269,26 @@ func (s *Server) processRequest(task *requestTask) {
 	select {
 	case <-ctx.Done():
 		logging.Logger.Printf("请求处理超时")
-		s.sendErrorResponse(task.writer, "", -32603, "请求处理超时")
+		// 为超时响应创建独立的 writer
+		writer := bufio.NewWriter(os.Stdout)
+		s.sendErrorResponse(writer, "", -32001, "Request timed out")
+		writer.Flush()
 	case <-done:
 		if err != nil {
 			logging.Logger.Printf("处理MCP请求失败: %v", err)
-			s.sendErrorResponse(task.writer, "", -32603, fmt.Sprintf("处理请求失败: %v", err))
+			// 为错误响应创建独立的 writer
+			writer := bufio.NewWriter(os.Stdout)
+			s.sendErrorResponse(writer, "", -32603, fmt.Sprintf("处理请求失败: %v", err))
+			writer.Flush()
 			return
 		}
 		
-		// 写入响应
-		if err := s.writeResponse(task.writer, response); err != nil {
+		// 为响应创建独立的 writer
+		writer := bufio.NewWriter(os.Stdout)
+		if err := s.writeResponse(writer, response); err != nil {
 			logging.Logger.Printf("写入标准输出失败: %v", err)
 		}
+		writer.Flush()
 	}
 }
 
@@ -451,14 +457,6 @@ func (s *Server) handleToolsList(request mcp.MCPRequest) ([]byte, error) {
 	
 	// 获取所有可用的工具名称
 	tools := s.handler.GetAvailableTools()
-	
-	// 打印工具详情
-	logging.Logger.Printf("发现 %d 个可用工具:", len(tools))
-	for i, tool := range tools {
-		name := tool["name"].(string)
-		description := tool["description"].(string)
-		logging.Logger.Printf("  %d. %s: %s", i+1, name, description)
-	}
 	
 	// 构建工具列表响应
 	toolsListResult := map[string]interface{}{

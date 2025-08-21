@@ -249,6 +249,9 @@ func (h *RequestHandler) applyAuthentication(req *http.Request, operation *confi
 func (h *RequestHandler) GetAvailableTools() []map[string]interface{} {
 	var tools []map[string]interface{}
 	
+	// 预分配切片容量，减少内存分配
+	tools = make([]map[string]interface{}, 0, len(h.openAPISpec.Paths)*2)
+	
 	// 遍历 OpenAPI 规范中的所有操作
 	for path, pathItem := range h.openAPISpec.Paths {
 		for method, operation := range pathItem {
@@ -259,21 +262,24 @@ func (h *RequestHandler) GetAvailableTools() []map[string]interface{} {
 			// 生成操作 ID
 			operationID := generateOperationID(method, path)
 			
+			// 预分配 map 容量
+			tool := make(map[string]interface{}, 3)
+			inputSchema := make(map[string]interface{}, 3)
+			
 			// 构建工具信息
-			tool := map[string]interface{}{
-				"name": operationID,
-				"description": operation.Description,
-				"inputSchema": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{},
-					"required": []string{}, // 确保始终是空数组而不是 null
-				},
-			}
+			tool["name"] = operationID
+			tool["description"] = operation.Description
+			
+			inputSchema["type"] = "object"
+			inputSchema["properties"] = make(map[string]interface{})
+			inputSchema["required"] = make([]string, 0)
+			
+			tool["inputSchema"] = inputSchema
 			
 			// 添加参数信息
 			if len(operation.Parameters) > 0 {
-				properties := make(map[string]interface{})
-				var required []string
+				properties := make(map[string]interface{}, len(operation.Parameters))
+				required := make([]string, 0, len(operation.Parameters))
 				
 				for _, param := range operation.Parameters {
 					properties[param.Name] = map[string]interface{}{
@@ -286,13 +292,8 @@ func (h *RequestHandler) GetAvailableTools() []map[string]interface{} {
 					}
 				}
 				
-				tool["inputSchema"].(map[string]interface{})["properties"] = properties
-				// 确保 required 始终是数组，即使为空
-				if len(required) > 0 {
-					tool["inputSchema"].(map[string]interface{})["required"] = required
-				} else {
-					tool["inputSchema"].(map[string]interface{})["required"] = []string{}
-				}
+				inputSchema["properties"] = properties
+				inputSchema["required"] = required
 			}
 			
 			tools = append(tools, tool)
