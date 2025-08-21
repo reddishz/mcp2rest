@@ -144,9 +144,17 @@ func TryLoadServerConfig() (*ServerConfig, *GlobalConfig, error) {
 	
 	// 检查文件是否存在
 	if _, err := os.Stat(serverConfigPath); os.IsNotExist(err) {
-		// 文件不存在，返回默认配置
-		server, global := GetDefaultServerConfig()
-		return server, global, nil
+		// 文件不存在，尝试从工作目录加载
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, nil, fmt.Errorf("获取当前工作目录失败: %v", err)
+		}
+		serverConfigPath = filepath.Join(cwd, "configs/server.yaml")
+		if _, err := os.Stat(serverConfigPath); os.IsNotExist(err) {
+			// 文件仍不存在，返回默认配置
+			server, global := GetDefaultServerConfig()
+			return server, global, nil
+		}
 	}
 	
 	// 文件存在，尝试加载
