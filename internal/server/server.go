@@ -314,6 +314,7 @@ func (s *Server) stdioWorker(requestChan <-chan *requestTask) {
 // processRequest 处理单个请求
 func (s *Server) processRequest(task *requestTask) {
 	// 设置请求超时
+	logging.Logger.Printf("处理请求，超时配置: %v", s.config.Global.Timeout)
 	ctx, cancel := context.WithTimeout(s.ctx, s.config.Global.Timeout)
 	defer cancel()
 	
@@ -332,9 +333,10 @@ func (s *Server) processRequest(task *requestTask) {
 	}()
 	
 	// 等待处理完成或超时
+	logging.Logger.Printf("等待请求处理完成...")
 	select {
 	case <-ctx.Done():
-		logging.Logger.Printf("请求处理超时")
+		logging.Logger.Printf("请求处理超时，超时时间: %v", s.config.Global.Timeout)
 		// 直接使用 os.Stdout
 		errResp := mcp.NewErrorResponse("", -32001, "Request timed out")
 		if response, err := json.Marshal(errResp); err == nil {
@@ -342,6 +344,7 @@ func (s *Server) processRequest(task *requestTask) {
 			os.Stdout.Write([]byte("\n"))
 		}
 	case res := <-resultChan:
+		logging.Logger.Printf("请求处理完成")
 		if res.err != nil {
 			logging.Logger.Printf("处理MCP请求失败: %v", res.err)
 			// 直接使用 os.Stdout
@@ -353,9 +356,17 @@ func (s *Server) processRequest(task *requestTask) {
 			return
 		}
 		
+		// 检查响应是否为空（通知类型的请求）
+		if res.response == nil {
+			logging.Logger.Printf("通知类型请求，无需发送响应")
+			return
+		}
+		
 		// 直接使用 os.Stdout
+		logging.Logger.Printf("发送响应: %s", string(res.response))
 		os.Stdout.Write(res.response)
 		os.Stdout.Write([]byte("\n"))
+		logging.Logger.Printf("响应发送完成")
 	}
 }
 

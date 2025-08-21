@@ -56,9 +56,12 @@ func NewTestClient(serverPath, configPath string) (*TestClient, error) {
 // SendRequest 发送 MCP 请求
 func (tc *TestClient) SendRequest(method string, params interface{}) (*mcp.MCPResponse, error) {
 	// 创建请求
+	idStr := fmt.Sprintf("test_%d", time.Now().UnixNano())
+	idBytes, _ := json.Marshal(idStr)
+	
 	request := mcp.MCPRequest{
 		JSONRPC: "2.0",
-		ID:      fmt.Sprintf("test_%d", time.Now().UnixNano()),
+		ID:      idBytes,
 		Method:  method,
 	}
 
@@ -77,6 +80,125 @@ func (tc *TestClient) SendRequest(method string, params interface{}) (*mcp.MCPRe
 
 	// 发送请求
 	requestStr := string(requestBytes) + "\n"
+	fmt.Printf("DEBUG: 发送请求: %s", requestStr)
+	if _, err := tc.stdin.Write([]byte(requestStr)); err != nil {
+		return nil, fmt.Errorf("发送请求失败: %w", err)
+	}
+
+	// 读取响应（带超时）
+	responseChan := make(chan string, 1)
+	errChan := make(chan error, 1)
+
+	go func() {
+		responseStr, err := tc.reader.ReadString('\n')
+		if err != nil {
+			errChan <- err
+			return
+		}
+		responseChan <- responseStr
+	}()
+
+	select {
+	case responseStr := <-responseChan:
+		fmt.Printf("DEBUG: 收到响应: %s", responseStr)
+		// 解析响应
+		var response mcp.MCPResponse
+		if err := json.Unmarshal([]byte(strings.TrimSpace(responseStr)), &response); err != nil {
+			return nil, fmt.Errorf("解析响应失败: %w, 原始响应: %s", err, strings.TrimSpace(responseStr))
+		}
+		return &response, nil
+	case err := <-errChan:
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	case <-time.After(30 * time.Second):
+		return nil, fmt.Errorf("读取响应超时")
+	}
+}
+
+// Initialize 初始化 MCP 连接
+func (tc *TestClient) Initialize() error {
+	initParams := map[string]interface{}{
+		"protocolVersion": "2025-03-26",
+		"capabilities": map[string]interface{}{
+			"tools": map[string]interface{}{
+				"listChanged": true,
+			},
+			"resources": map[string]interface{}{
+				"subscribe": true,
+				"unsubscribe": true,
+			},
+			"logging": map[string]interface{}{
+				"logMessage": true,
+			},
+			"streamableHttp": map[string]interface{}{
+				"request": true,
+			},
+		},
+		"clientInfo": map[string]interface{}{
+			"name":    "MCP2REST-TestClient",
+			"version": "1.0.0",
+		},
+	}
+
+	response, err := tc.SendRequest("initialize", initParams)
+	if err != nil {
+		return fmt.Errorf("初始化失败: %w", err)
+	}
+
+	if response.Error != nil {
+		return fmt.Errorf("初始化错误: %+v", response.Error)
+	}
+
+	fmt.Println("✅ MCP 连接初始化成功")
+	return nil
+}
+
+// SendInitialized 发送初始化完成通知
+func (tc *TestClient) SendInitialized() error {
+	// 通知类型的方法不需要等待响应
+	request := mcp.MCPRequest{
+		JSONRPC: "2.0",
+		ID:      []byte("null"),
+		Method:  "notifications/initialized",
+		Params:  []byte("{}"),
+	}
+
+	requestBytes, err := json.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("序列化请求失败: %w", err)
+	}
+
+	requestStr := string(requestBytes) + "\n"
+	if _, err := tc.stdin.Write([]byte(requestStr)); err != nil {
+		return fmt.Errorf("发送请求失败: %w", err)
+	}
+
+	// 等待一小段时间，确保通知被处理
+	time.Sleep(100 * time.Millisecond)
+
+	fmt.Println("✅ 初始化完成通知已发送")
+	return nil
+}
+
+// GetToolsList 获取工具列表
+func (tc *TestClient) GetToolsList() ([]map[string]interface{}, error) {
+	// 直接发送请求并读取响应
+	idStr := fmt.Sprintf("tools_list_%d", time.Now().UnixNano())
+	idBytes, _ := json.Marshal(idStr)
+	
+	request := mcp.MCPRequest{
+		JSONRPC: "2.0",
+		ID:      idBytes,
+		Method:  "tools/list",
+		Params:  []byte("{}"),
+	}
+
+	requestBytes, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+
+	requestStr := string(requestBytes) + "\n"
+	fmt.Printf("DEBUG: 发送工具列表请求: %s", requestStr)
 	if _, err := tc.stdin.Write([]byte(requestStr)); err != nil {
 		return nil, fmt.Errorf("发送请求失败: %w", err)
 	}
@@ -87,13 +209,29 @@ func (tc *TestClient) SendRequest(method string, params interface{}) (*mcp.MCPRe
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
+	fmt.Printf("DEBUG: 收到响应: %s\n", strings.TrimSpace(responseStr))
+
 	// 解析响应
 	var response mcp.MCPResponse
 	if err := json.Unmarshal([]byte(strings.TrimSpace(responseStr)), &response); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w", err)
+		return nil, fmt.Errorf("解析响应失败: %w, 原始响应: %s", err, strings.TrimSpace(responseStr))
 	}
 
-	return &response, nil
+	if response.Error != nil {
+		return nil, fmt.Errorf("获取工具列表错误: %+v", response.Error)
+	}
+
+	var result struct {
+		Tools []map[string]interface{} `json:"tools"`
+	}
+
+	if response.Result != nil {
+		if err := json.Unmarshal(response.Result, &result); err != nil {
+			return nil, fmt.Errorf("解析工具列表失败: %w", err)
+		}
+	}
+
+	return result.Tools, nil
 }
 
 // Close 关闭客户端
@@ -248,6 +386,9 @@ func getProcessCount(name string) int {
 }
 
 func main() {
+	// 设置环境变量
+	os.Setenv("APIKEYAUTH_API_KEY", "ded45a001ffb9c47b1e29fcbdd6bcec6")
+
 	// 配置参数
 	serverPath := "./bin/mcp2rest"
 	configPath := "./configs/bmc_api.yaml"
@@ -279,13 +420,38 @@ func main() {
 	time.Sleep(2 * time.Second)
 	fmt.Println("服务器启动后进程数:", getProcessCount("mcp2rest"))
 
+	// 初始化 MCP 连接
+	fmt.Println("初始化 MCP 连接...")
+	if err := client.Initialize(); err != nil {
+		log.Fatalf("初始化 MCP 连接失败: %v", err)
+	}
+
+	// 发送初始化完成通知
+	if err := client.SendInitialized(); err != nil {
+		log.Fatalf("发送初始化完成通知失败: %v", err)
+	}
+
+	// 获取可用工具列表
+	fmt.Println("获取可用工具列表...")
+	tools, err := client.GetToolsList()
+	if err != nil {
+		log.Fatalf("获取工具列表失败: %v", err)
+	}
+
+	fmt.Printf("发现 %d 个可用工具:\n", len(tools))
+	for i, tool := range tools {
+		name := tool["name"].(string)
+		description := tool["description"].(string)
+		fmt.Printf("  %d. %s: %s\n", i+1, name, description)
+	}
+
 	// 创建测试套件
 	testSuite := NewTestSuite(client)
 
-	// 添加测试用例
+	// 添加测试用例（使用正确的工具名称）
 	testSuite.AddTest(TestCase{
 		Name:     "测试 BMC 列表查询",
-		ToolName: "list",
+		ToolName: "getList",
 		Parameters: map[string]interface{}{
 			"page":  1,
 			"limit": 10,
@@ -297,7 +463,7 @@ func main() {
 
 	testSuite.AddTest(TestCase{
 		Name:     "测试 BMC 详情查询",
-		ToolName: "detail",
+		ToolName: "getDetail",
 		Parameters: map[string]interface{}{
 			"id": "test_bmc_001",
 		},
@@ -306,7 +472,7 @@ func main() {
 
 	testSuite.AddTest(TestCase{
 		Name:     "测试 BMC 搜索",
-		ToolName: "search",
+		ToolName: "getSearch",
 		Parameters: map[string]interface{}{
 			"q":      "测试",
 			"page":   1,
@@ -318,7 +484,7 @@ func main() {
 
 	testSuite.AddTest(TestCase{
 		Name:     "测试 BMC 创建",
-		ToolName: "create",
+		ToolName: "postCreate",
 		Parameters: map[string]interface{}{
 			"id":          "test_bmc_001",
 			"title":       "测试 BMC",
@@ -340,7 +506,7 @@ func main() {
 
 	testSuite.AddTest(TestCase{
 		Name:     "测试 BMC 更新",
-		ToolName: "update",
+		ToolName: "postUpdate",
 		Parameters: map[string]interface{}{
 			"id":    "test_bmc_001",
 			"title": "更新后的测试 BMC",
@@ -350,7 +516,7 @@ func main() {
 
 	testSuite.AddTest(TestCase{
 		Name:     "测试 BMC 删除",
-		ToolName: "delete",
+		ToolName: "postDelete",
 		Parameters: map[string]interface{}{
 			"id": "test_bmc_001",
 		},
