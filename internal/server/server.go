@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"github.com/mcp2rest/internal/logging"
 	"net/http"
 	"os"
 	"sync"
@@ -95,7 +96,7 @@ func (s *Server) startWebSocketServer() error {
 		Handler: mux,
 	}
 
-	log.Printf("WebSocket服务器启动在 %s", addr)
+	logging.Logger.Printf("WebSocket服务器启动在 %s", addr)
 	return s.httpServer.ListenAndServe()
 }
 
@@ -127,7 +128,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket读取错误: %v", err)
+				logging.Logger.Printf("WebSocket读取错误: %v", err)
 			}
 			break
 		}
@@ -135,13 +136,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		// 处理MCP请求
 		response, err := s.handleMCPRequest(message)
 		if err != nil {
-			log.Printf("处理MCP请求失败: %v", err)
+			logging.Logger.Printf("处理MCP请求失败: %v", err)
 			continue
 		}
 
 		// 发送响应
 		if err := conn.WriteMessage(websocket.TextMessage, response); err != nil {
-			log.Printf("WebSocket写入错误: %v", err)
+			logging.Logger.Printf("WebSocket写入错误: %v", err)
 			break
 		}
 	}
@@ -149,7 +150,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // startStdioServer 启动标准输入/输出服务器
 func (s *Server) startStdioServer() error {
-	log.Println("启动标准输入/输出服务器")
+	logging.Logger.Println("启动标准输入/输出服务器")
 	
 	go func() {
 		var buffer [4096]byte
@@ -161,20 +162,20 @@ func (s *Server) startStdioServer() error {
 				// 从标准输入读取
 				n, err := os.Stdin.Read(buffer[:])
 				if err != nil {
-					log.Printf("从标准输入读取失败: %v", err)
+					logging.Logger.Printf("从标准输入读取失败: %v", err)
 					continue
 				}
 
 				// 处理MCP请求
 				response, err := s.handleMCPRequest(buffer[:n])
 				if err != nil {
-					log.Printf("处理MCP请求失败: %v", err)
+					logging.Logger.Printf("处理MCP请求失败: %v", err)
 					continue
 				}
 
 				// 写入标准输出
 				if _, err := os.Stdout.Write(response); err != nil {
-					log.Printf("写入标准输出失败: %v", err)
+					logging.Logger.Printf("写入标准输出失败: %v", err)
 				}
 				fmt.Println() // 添加换行符
 			}

@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: 8088
   host: "0.0.0.0"
   mode: "stdio"  # 可选值: "websocket" 或 "stdio"
 

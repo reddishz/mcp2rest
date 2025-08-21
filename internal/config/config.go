@@ -1,9 +1,10 @@
 package config
 
 import (
+	"log"
+	"os"
 	"fmt"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -195,10 +196,39 @@ func LoadMainConfig(filePath string) (*MainConfig, error) {
 
 // LoadServerConfig 从服务器配置文件加载配置
 func LoadServerConfig(filePath string) (*ServerConfig, *GlobalConfig, error) {
-	data, err := ioutil.ReadFile(filePath)
+	log.Printf("开始加载服务器配置文件: %s", filePath)
+	if filePath == "" {
+		log.Printf("服务器配置文件路径为空")
+		return nil, nil, fmt.Errorf("服务器配置文件路径为空")
+	}
+
+	// 记录文件路径的绝对路径
+	absPath, err := filepath.Abs(filePath)
 	if err != nil {
+		log.Printf("获取文件绝对路径失败: %s, 错误: %v", filePath, err)
+		return nil, nil, fmt.Errorf("获取文件绝对路径失败: %w", err)
+	}
+	log.Printf("服务器配置文件绝对路径: %s", absPath)
+
+	// 检查文件是否存在
+	if _, err := os.Stat(absPath); err != nil {
+		log.Printf("服务器配置文件不存在: %s, 错误: %v", absPath, err)
+		return nil, nil, fmt.Errorf("服务器配置文件 %s 不存在: %w", absPath, err)
+	}
+	log.Printf("服务器配置文件存在: %s", absPath)
+
+	// 记录文件读取开始时间
+	startTime := time.Now()
+	log.Printf("开始读取服务器配置文件: %s", absPath)
+
+	data, err := ioutil.ReadFile(absPath)
+	if err != nil {
+		log.Printf("读取服务器配置文件失败: %s, 错误: %v", absPath, err)
 		return nil, nil, fmt.Errorf("读取服务器配置文件失败: %w", err)
 	}
+
+	// 记录文件读取结束时间
+	log.Printf("服务器配置文件读取完成: %s, 耗时: %v", absPath, time.Since(startTime))
 
 	var cfg struct {
 		Server ServerConfig `yaml:"server"`
