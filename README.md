@@ -105,7 +105,8 @@ go build -o bin/mcp2rest cmd/mcp2rest/main.go
 
 配置文件位于 `configs/` 目录：
 - `bmc_api.yaml`: OpenAPI 规范文件
-- `server.yaml`: 服务器配置
+- `stdio.yaml`: stdio 版本专用配置
+- `sse.yaml`: SSE 版本专用配置
 
 ## 主要改进
 

@@ -1,0 +1,6 @@
+server:
+  mode: "stdio"  # stdio 模式专用
+
+global:
+  timeout: 60s
+  max_request_size: "10MB"

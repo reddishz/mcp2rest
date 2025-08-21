@@ -42,8 +42,15 @@ func main() {
 		logging.Logger.Fatalf("加载配置失败: %v", err)
 	}
 	
-	// 强制设置为 sse 模式
-	cfg.Server.Mode = "sse"
+	// 加载 sse 专用服务器配置
+	serverConfig, globalConfig, err := config.LoadServerConfig("configs/sse.yaml")
+	if err != nil {
+		logging.Logger.Fatalf("加载服务器配置失败: %v", err)
+	}
+	
+	// 使用 sse 专用配置
+	cfg.Server = *serverConfig
+	cfg.Global = *globalConfig
 	
 	logging.Logger.Printf("配置加载成功: 主机=%s, 端口=%d", cfg.Server.Host, cfg.Server.Port)
 	logging.Logger.Printf("OpenAPI规范: %s v%s", spec.Info.Title, spec.Info.Version)
