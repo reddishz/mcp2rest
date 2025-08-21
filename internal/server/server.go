@@ -749,7 +749,7 @@ func (s *Server) handleInitialize(request mcp.MCPRequest) ([]byte, error) {
 
 	// 构建初始化响应
 	initResult := map[string]interface{}{
-		"protocolVersion": "20241105",
+		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
 			"tools": map[string]interface{}{
 				"listChanged": true,
@@ -896,8 +896,46 @@ func (s *Server) handleToolCall(request mcp.MCPRequest) ([]byte, error) {
 		return json.Marshal(errResp)
 	}
 
+	// 按照 MCP 规范构建工具调用响应
+	// 工具调用响应应该包含 content 数组字段
+	var toolCallResponse map[string]interface{}
+	
+	if result.Type == "error" {
+		// 错误响应
+		toolCallResponse = map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("错误: %v", result.Result),
+				},
+			},
+			"isError": true,
+		}
+	} else {
+		// 成功响应
+		// 将结果转换为文本格式
+		resultText := ""
+		if result.Result != nil {
+			if resultBytes, err := json.MarshalIndent(result.Result, "", "  "); err == nil {
+				resultText = string(resultBytes)
+			} else {
+				resultText = fmt.Sprintf("%v", result.Result)
+			}
+		}
+		
+		toolCallResponse = map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": resultText,
+				},
+			},
+			"isError": false,
+		}
+	}
+
 	// 创建成功响应
-	response, err := mcp.NewSuccessResponse(request.GetIDString(), result)
+	response, err := mcp.NewSuccessResponse(request.GetIDString(), toolCallResponse)
 	if err != nil {
 		logging.Logger.Printf("创建成功响应失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, fmt.Sprintf("创建响应失败: %v", err))
