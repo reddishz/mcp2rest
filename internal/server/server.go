@@ -322,9 +322,6 @@ func (s *Server) sendErrorResponse(writer *bufio.Writer, id string, code int, me
 
 // handleMCPRequest 处理MCP请求
 func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
-	// 记录请求开始时间
-	startTime := time.Now()
-	
 	// 解析请求
 	var request mcp.MCPRequest
 	if err := json.Unmarshal(data, &request); err != nil {
@@ -334,27 +331,118 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 	}
 	
 	// 记录请求信息
-	logging.Logger.Printf("收到MCP请求: ID=%s, Method=%s", request.ID, request.Method)
+	logging.Logger.Printf("收到MCP请求: ID=%s, Method=%s", request.GetIDString(), request.Method)
 	
 	// 验证请求格式
 	if request.JSONRPC != "2.0" {
 		logging.Logger.Printf("不支持的JSON-RPC版本: %s", request.JSONRPC)
-		errResp := mcp.NewErrorResponse(request.ID, -32600, "不支持的JSON-RPC版本")
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32600, "不支持的JSON-RPC版本")
 		return json.Marshal(errResp)
 	}
 	
-	// 只处理工具调用
-	if request.Method != "toolCall" {
+	// 处理不同的方法
+	switch request.Method {
+	case "initialize":
+		return s.handleInitialize(request)
+	case "notifications/initialized":
+		return s.handleInitialized(request)
+	case "toolCall":
+		return s.handleToolCall(request)
+	default:
 		logging.Logger.Printf("不支持的方法: %s", request.Method)
-		errResp := mcp.NewErrorResponse(request.ID, -32601, "不支持的方法")
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32601, "不支持的方法")
 		return json.Marshal(errResp)
 	}
+}
+
+// handleInitialize 处理初始化请求
+func (s *Server) handleInitialize(request mcp.MCPRequest) ([]byte, error) {
+	logging.Logger.Printf("处理初始化请求")
+	
+	// 解析初始化参数
+	var initParams struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		Capabilities    struct {
+			Tools      map[string]interface{} `json:"tools"`
+			Resources  map[string]interface{} `json:"resources"`
+			Logging    map[string]interface{} `json:"logging"`
+			StreamableHttp map[string]interface{} `json:"streamableHttp"`
+		} `json:"capabilities"`
+		ClientInfo struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"clientInfo"`
+	}
+	
+	if err := json.Unmarshal(request.Params, &initParams); err != nil {
+		logging.Logger.Printf("解析初始化参数失败: %v", err)
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32602, "无效的初始化参数")
+		return json.Marshal(errResp)
+	}
+	
+	logging.Logger.Printf("客户端信息: %s v%s", initParams.ClientInfo.Name, initParams.ClientInfo.Version)
+	logging.Logger.Printf("协议版本: %s", initParams.ProtocolVersion)
+	
+	// 构建初始化响应
+	initResult := map[string]interface{}{
+		"protocolVersion": "2025-03-26",
+		"capabilities": map[string]interface{}{
+			"tools": map[string]interface{}{
+				"listChanged": true,
+			},
+			"resources": map[string]interface{}{
+				"subscribe": true,
+				"unsubscribe": true,
+			},
+			"logging": map[string]interface{}{
+				"logMessage": true,
+			},
+			"streamableHttp": map[string]interface{}{
+				"request": true,
+			},
+		},
+		"serverInfo": map[string]interface{}{
+			"name":    "MCP2REST",
+			"version": "1.0.0",
+		},
+	}
+	
+	response, err := mcp.NewSuccessResponse(request.GetIDString(), initResult)
+	if err != nil {
+		logging.Logger.Printf("创建初始化响应失败: %v", err)
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, "创建响应失败")
+		return json.Marshal(errResp)
+	}
+	
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		logging.Logger.Printf("序列化初始化响应失败: %v", err)
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, "序列化响应失败")
+		return json.Marshal(errResp)
+	}
+	
+	logging.Logger.Printf("初始化响应发送成功")
+	return responseBytes, nil
+}
+
+// handleInitialized 处理初始化完成通知
+func (s *Server) handleInitialized(request mcp.MCPRequest) ([]byte, error) {
+	logging.Logger.Printf("处理初始化完成通知")
+	
+	// 对于通知类型的请求，不需要返回响应
+	return nil, nil
+}
+
+// handleToolCall 处理工具调用请求
+func (s *Server) handleToolCall(request mcp.MCPRequest) ([]byte, error) {
+	// 记录请求开始时间
+	startTime := time.Now()
 	
 	// 解析工具调用参数
 	toolParams, err := mcp.ParseToolCallParams(request.Params)
 	if err != nil {
 		logging.Logger.Printf("解析工具调用参数失败: %v", err)
-		errResp := mcp.NewErrorResponse(request.ID, -32602, fmt.Sprintf("无效的参数: %v", err))
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32602, fmt.Sprintf("无效的参数: %v", err))
 		return json.Marshal(errResp)
 	}
 	
@@ -365,15 +453,15 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 	result, err := s.handler.HandleRequest(toolParams)
 	if err != nil {
 		logging.Logger.Printf("处理工具调用失败: %v", err)
-		errResp := mcp.NewErrorResponse(request.ID, -32603, fmt.Sprintf("内部错误: %v", err))
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, fmt.Sprintf("内部错误: %v", err))
 		return json.Marshal(errResp)
 	}
 	
 	// 创建成功响应
-	response, err := mcp.NewSuccessResponse(request.ID, result)
+	response, err := mcp.NewSuccessResponse(request.GetIDString(), result)
 	if err != nil {
 		logging.Logger.Printf("创建成功响应失败: %v", err)
-		errResp := mcp.NewErrorResponse(request.ID, -32603, fmt.Sprintf("创建响应失败: %v", err))
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, fmt.Sprintf("创建响应失败: %v", err))
 		return json.Marshal(errResp)
 	}
 	
@@ -381,13 +469,13 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		logging.Logger.Printf("序列化响应失败: %v", err)
-		errResp := mcp.NewErrorResponse(request.ID, -32603, fmt.Sprintf("序列化响应失败: %v", err))
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, fmt.Sprintf("序列化响应失败: %v", err))
 		return json.Marshal(errResp)
 	}
 	
 	// 记录处理时间
 	duration := time.Since(startTime)
-	logging.Logger.Printf("MCP请求处理完成: ID=%s, 耗时=%v", request.ID, duration)
+	logging.Logger.Printf("工具调用处理完成: ID=%s, 耗时=%v", request.GetIDString(), duration)
 	
 	return responseBytes, nil
 }

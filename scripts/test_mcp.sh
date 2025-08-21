@@ -10,6 +10,9 @@ SERVER_PATH="./bin/mcp2rest"
 CONFIG_PATH="./configs/bmc_api.yaml"
 TEST_DATA_DIR="./test_data"
 
+# 设置 API 密钥
+export APIKEYAUTH_API_KEY="ded45a001ffb9c47b1e29fcbdd6bcec6"
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -88,16 +91,8 @@ send_mcp_request() {
     local params="$2"
     local request_id="$3"
     
-    # 构建 MCP 请求
-    local request=$(cat <<EOF
-{
-    "jsonrpc": "2.0",
-    "id": "$request_id",
-    "method": "$method",
-    "params": $params
-}
-EOF
-)
+    # 构建 MCP 请求（单行JSON）
+    local request="{\"jsonrpc\":\"2.0\",\"id\":\"$request_id\",\"method\":\"$method\",\"params\":$params}"
     
     echo "$request"
 }
@@ -106,15 +101,7 @@ EOF
 test_list() {
     log_info "测试 BMC 列表查询..."
     
-    local params='{
-        "name": "list",
-        "parameters": {
-            "page": 1,
-            "limit": 5,
-            "sort": "created",
-            "order": "desc"
-        }
-    }'
+    local params='{"name":"getList","parameters":{"page":1,"limit":5,"sort":"created","order":"desc"}}'
     
     local response=$(send_mcp_request "toolCall" "$params" "test_list_001")
     echo "$response" | $SERVER_PATH -config $CONFIG_PATH
@@ -126,12 +113,7 @@ test_list() {
 test_detail() {
     log_info "测试 BMC 详情查询..."
     
-    local params='{
-        "name": "detail",
-        "parameters": {
-            "id": "test_bmc_001"
-        }
-    }'
+    local params='{"name":"getDetail","parameters":{"id":"test_bmc_001"}}'
     
     local response=$(send_mcp_request "toolCall" "$params" "test_detail_001")
     echo "$response" | $SERVER_PATH -config $CONFIG_PATH
@@ -143,15 +125,7 @@ test_detail() {
 test_search() {
     log_info "测试 BMC 搜索..."
     
-    local params='{
-        "name": "search",
-        "parameters": {
-            "q": "测试",
-            "page": 1,
-            "limit": 10,
-            "fields": "title,description"
-        }
-    }'
+    local params='{"name":"getSearch","parameters":{"q":"测试","page":1,"limit":10,"fields":"title,description"}}'
     
     local response=$(send_mcp_request "toolCall" "$params" "test_search_001")
     echo "$response" | $SERVER_PATH -config $CONFIG_PATH
@@ -163,25 +137,7 @@ test_search() {
 test_create() {
     log_info "测试 BMC 创建..."
     
-    local params='{
-        "name": "create",
-        "parameters": {
-            "id": "test_bmc_001",
-            "title": "测试 BMC",
-            "description": "这是一个测试用的 BMC 数据",
-            "bmc": {
-                "customerSegments": ["企业用户", "个人用户"],
-                "valuePropositions": ["高效解决方案", "优质服务"],
-                "channels": ["官网", "合作伙伴"],
-                "customerRelationships": ["长期合作", "技术支持"],
-                "keyResources": ["技术团队", "品牌声誉"],
-                "keyActivities": ["产品开发", "市场推广"],
-                "keyPartnerships": ["技术供应商", "渠道伙伴"],
-                "costStructure": ["研发成本", "运营成本"],
-                "revenueStreams": ["产品销售", "服务收费"]
-            }
-        }
-    }'
+    local params='{"name":"postCreate","parameters":{"id":"test_bmc_001","title":"测试 BMC","description":"这是一个测试用的 BMC 数据","bmc":{"customerSegments":["企业用户","个人用户"],"valuePropositions":["高效解决方案","优质服务"],"channels":["官网","合作伙伴"],"customerRelationships":["长期合作","技术支持"],"keyResources":["技术团队","品牌声誉"],"keyActivities":["产品开发","市场推广"],"keyPartnerships":["技术供应商","渠道伙伴"],"costStructure":["研发成本","运营成本"],"revenueStreams":["产品销售","服务收费"]}}}'
     
     local response=$(send_mcp_request "toolCall" "$params" "test_create_001")
     echo "$response" | $SERVER_PATH -config $CONFIG_PATH
@@ -193,13 +149,7 @@ test_create() {
 test_update() {
     log_info "测试 BMC 更新..."
     
-    local params='{
-        "name": "update",
-        "parameters": {
-            "id": "test_bmc_001",
-            "title": "更新后的测试 BMC"
-        }
-    }'
+    local params='{"name":"postUpdate","parameters":{"id":"test_bmc_001","title":"更新后的测试 BMC"}}'
     
     local response=$(send_mcp_request "toolCall" "$params" "test_update_001")
     echo "$response" | $SERVER_PATH -config $CONFIG_PATH
@@ -211,12 +161,7 @@ test_update() {
 test_delete() {
     log_info "测试 BMC 删除..."
     
-    local params='{
-        "name": "delete",
-        "parameters": {
-            "id": "test_bmc_001"
-        }
-    }'
+    local params='{"name":"postDelete","parameters":{"id":"test_bmc_001"}}'
     
     local response=$(send_mcp_request "toolCall" "$params" "test_delete_001")
     echo "$response" | $SERVER_PATH -config $CONFIG_PATH

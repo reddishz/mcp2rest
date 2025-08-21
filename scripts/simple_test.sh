@@ -9,6 +9,9 @@ set -e
 SERVER_PATH="./bin/mcp2rest"
 CONFIG_PATH="./configs/bmc_api.yaml"
 
+# 设置 API 密钥
+export APIKEYAUTH_API_KEY="ded45a001ffb9c47b1e29fcbdd6bcec6"
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -51,19 +54,8 @@ check_dependencies() {
 test_mcp_communication() {
     log_info "测试 MCP 协议通信..."
     
-    # 创建测试请求
-    local test_request='{
-        "jsonrpc": "2.0",
-        "id": "test_001",
-        "method": "toolCall",
-        "params": {
-            "name": "list",
-            "parameters": {
-                "page": 1,
-                "limit": 5
-            }
-        }
-    }'
+    # 创建测试请求（单行JSON）
+    local test_request='{"jsonrpc":"2.0","id":"test_001","method":"toolCall","params":{"name":"getList","parameters":{"page":1,"limit":5}}}'
     
     # 发送请求并获取响应
     local response=$(echo "$test_request" | $SERVER_PATH -config $CONFIG_PATH)
@@ -83,21 +75,8 @@ test_mcp_communication() {
 test_tool_call() {
     log_info "测试工具调用..."
     
-    # 测试列表查询
-    local list_request='{
-        "jsonrpc": "2.0",
-        "id": "test_list_001",
-        "method": "toolCall",
-        "params": {
-            "name": "list",
-            "parameters": {
-                "page": 1,
-                "limit": 3,
-                "sort": "created",
-                "order": "desc"
-            }
-        }
-    }'
+    # 测试列表查询（单行JSON）
+    local list_request='{"jsonrpc":"2.0","id":"test_list_001","method":"toolCall","params":{"name":"getList","parameters":{"page":1,"limit":3,"sort":"created","order":"desc"}}}'
     
     local response=$(echo "$list_request" | $SERVER_PATH -config $CONFIG_PATH)
     

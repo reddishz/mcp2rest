@@ -11,6 +11,9 @@ CONFIG_PATH="./configs/bmc_api.yaml"
 TEST_COUNT=100
 CONCURRENT_REQUESTS=10
 
+# 设置 API 密钥
+export APIKEYAUTH_API_KEY="ded45a001ffb9c47b1e29fcbdd6bcec6"
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -57,7 +60,7 @@ check_dependencies() {
 generate_test_request() {
     local id="$1"
     cat <<EOF
-{"jsonrpc":"2.0","id":"perf_test_$id","method":"toolCall","params":{"name":"list","parameters":{"page":1,"limit":5}}}
+{"jsonrpc":"2.0","id":"perf_test_$id","method":"toolCall","params":{"name":"getList","parameters":{"page":1,"limit":5}}}
 EOF
 }
 
@@ -98,10 +101,7 @@ concurrent_performance_test() {
     
     # 启动并发请求
     for ((i=1; i<=total_requests; i++)); do
-        (
-            result=$(single_performance_test "$i")
-            echo "$result" >> "$temp_file"
-        ) &
+        single_performance_test "$i" >> "$temp_file" &
         
         # 控制并发数
         if (( i % concurrent_count == 0 )); then
@@ -137,19 +137,18 @@ concurrent_performance_test() {
     fi
     
     # 输出结果
-    echo "并发测试结果:"
-    echo "  总请求数: $total_requests"
-    echo "  成功数: $success_count"
-    echo "  失败数: $fail_count"
-    echo "  成功率: ${success_rate}%"
-    echo "  总耗时: ${total_duration}ms"
-    echo "  平均耗时: ${avg_duration}ms"
-    echo "  并发数: $concurrent_count"
+    log_info "并发性能测试结果:"
+    log_info "  总请求数: $((success_count + fail_count))"
+    log_info "  成功请求: $success_count"
+    log_info "  失败请求: $fail_count"
+    log_info "  成功率: ${success_rate}%"
+    log_info "  平均响应时间: ${avg_duration}ms"
+    log_info "  总响应时间: ${total_duration}ms"
     
     if [ $success_rate -ge 90 ]; then
-        log_success "性能测试通过 (成功率: ${success_rate}%)"
+        log_success "性能测试通过"
     else
-        log_warning "性能测试警告 (成功率: ${success_rate}%)"
+        log_warning "性能测试警告: 成功率低于90%"
     fi
 }
 
@@ -157,12 +156,11 @@ concurrent_performance_test() {
 stress_test() {
     log_info "开始压力测试..."
     
-    # 测试不同的并发数
-    for concurrent in 1 5 10 20; do
+    # 逐步增加并发数
+    for concurrent in 1 5 10 20 50; do
         log_info "测试并发数: $concurrent"
-        concurrent_performance_test "$concurrent" "$TEST_COUNT"
-        echo "----------------------------------------"
-        sleep 1
+        concurrent_performance_test "$concurrent" 100
+        echo
     done
 }
 
@@ -173,38 +171,39 @@ latency_test() {
     local total_duration=0
     local min_duration=999999
     local max_duration=0
-    local success_count=0
+    local count=0
     
-    for ((i=1; i<=TEST_COUNT; i++)); do
-        result=$(single_performance_test "$i")
-        status=$(echo "$result" | cut -d: -f1)
-        duration=$(echo "$result" | cut -d: -f2)
+    for ((i=1; i<=50; i++)); do
+        local start_time=$(date +%s%N)
+        local request=$(generate_test_request "$i")
+        local response=$(echo "$request" | $SERVER_PATH -config $CONFIG_PATH 2>/dev/null)
+        local end_time=$(date +%s%N)
+        local duration=$(( (end_time - start_time) / 1000000 ))
         
-        if [ "$status" = "SUCCESS" ]; then
-            ((success_count++))
-            ((total_duration += duration))
-            
-            if [ $duration -lt $min_duration ]; then
-                min_duration=$duration
-            fi
-            
-            if [ $duration -gt $max_duration ]; then
-                max_duration=$duration
-            fi
+        ((total_duration += duration))
+        ((count++))
+        
+        if [ $duration -lt $min_duration ]; then
+            min_duration=$duration
+        fi
+        if [ $duration -gt $max_duration ]; then
+            max_duration=$duration
         fi
     done
     
-    local avg_duration=0
-    if [ $success_count -gt 0 ]; then
-        avg_duration=$((total_duration / success_count))
-    fi
+    local avg_duration=$((total_duration / count))
     
-    echo "延迟测试结果:"
-    echo "  总请求数: $TEST_COUNT"
-    echo "  成功数: $success_count"
-    echo "  最小延迟: ${min_duration}ms"
-    echo "  最大延迟: ${max_duration}ms"
-    echo "  平均延迟: ${avg_duration}ms"
+    log_info "延迟测试结果:"
+    log_info "  测试次数: $count"
+    log_info "  最小延迟: ${min_duration}ms"
+    log_info "  最大延迟: ${max_duration}ms"
+    log_info "  平均延迟: ${avg_duration}ms"
+    
+    if [ $avg_duration -lt 100 ]; then
+        log_success "延迟测试通过: 平均延迟低于100ms"
+    else
+        log_warning "延迟测试警告: 平均延迟高于100ms"
+    fi
 }
 
 # 主函数
@@ -214,17 +213,9 @@ main() {
     # 检查依赖
     check_dependencies
     
-    # 显示测试配置
-    echo "测试配置:"
-    echo "  服务器: $SERVER_PATH"
-    echo "  配置文件: $CONFIG_PATH"
-    echo "  测试次数: $TEST_COUNT"
-    echo "  并发数: $CONCURRENT_REQUESTS"
-    echo ""
-    
     # 运行延迟测试
     latency_test
-    echo ""
+    echo
     
     # 运行压力测试
     stress_test

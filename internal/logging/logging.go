@@ -11,12 +11,19 @@ import (
 var Logger *log.Logger
 
 func InitLogger() error {
-	// 获取当前工作目录
-	workDir, err := os.Getwd()
+	// 获取可执行文件路径
+	exePath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("无法获取工作目录: %v", err)
+		return fmt.Errorf("无法获取可执行文件路径: %v", err)
 	}
-	exeDir := workDir
+	
+	// 获取可执行文件所在目录
+	exeDir := filepath.Dir(exePath)
+	
+	// 如果可执行文件在 bin 目录下，使用上级目录
+	if filepath.Base(exeDir) == "bin" {
+		exeDir = filepath.Dir(exeDir)
+	}
 
 	// 创建日志目录
 	logDir := filepath.Join(exeDir, "logs")
