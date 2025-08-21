@@ -9,16 +9,20 @@ import (
 	"syscall"
 
 	"github.com/mcp2rest/internal/config"
+	"github.com/mcp2rest/internal/openapi"
 	"github.com/mcp2rest/internal/server"
 )
 
 func main() {
 	// 命令行参数
-	configFile := flag.String("config", "config.yaml", "配置文件路径")
+	apiConfigFile := flag.String("config", "configs/api_config.yaml", "API配置文件路径")
 	flag.Parse()
 
+	// 注册OpenAPI加载器
+	openapi.RegisterLoader()
+
 	// 加载配置
-	cfg, err := config.LoadConfig(*configFile)
+	cfg, err := config.LoadConfigWithOpenAPI(*apiConfigFile)
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}

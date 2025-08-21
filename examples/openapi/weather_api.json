@@ -1,0 +1,170 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "天气API",
+    "description": "提供天气预报和当前天气信息",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.weatherapi.com/v1",
+      "description": "天气API服务器"
+    }
+  ],
+  "paths": {
+    "/current.json": {
+      "get": {
+        "summary": "获取当前天气",
+        "description": "获取指定位置的当前天气信息",
+        "operationId": "getCurrentWeather",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "位置名称、邮政编码或经纬度",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "description": "返回结果的语言",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "zh_cn"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取天气信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "country": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "current": {
+                      "type": "object",
+                      "properties": {
+                        "temp_c": {
+                          "type": "number"
+                        },
+                        "condition": {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "icon": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "未授权访问"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/forecast.json": {
+      "get": {
+        "summary": "获取天气预报",
+        "description": "获取指定位置的天气预报信息",
+        "operationId": "getWeatherForecast",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "位置名称、邮政编码或经纬度",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "description": "预报天数（1-10）",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            }
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "description": "返回结果的语言",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "zh_cn"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取天气预报",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "未授权访问"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "key"
+      }
+    }
+  }
+}
