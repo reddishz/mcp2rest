@@ -112,7 +112,7 @@ go build -o bin/mcp2rest cmd/mcp2rest/main.go
 
 ### 环境变量配置
 
-MCP2REST 使用环境变量来配置 API 认证信息，**支持自动加载 `.env` 文件**。
+MCP2REST 使用环境变量来配置 API 认证信息和调试模式，**支持自动加载 `.env` 文件**。
 
 #### 自动加载（推荐）
 
@@ -127,6 +127,9 @@ cp configs/.env.example configs/.env
 ```bash
 # BMC API 认证
 APIKEYAUTH_API_KEY=your_actual_bmc_api_key_here
+
+# 调试模式
+DEBUG=true  # 设置为 true 启用详细日志记录
 
 # 其他配置...
 ```
@@ -154,13 +157,44 @@ source configs/.env
 
 # 方法2：使用 export 命令
 export APIKEYAUTH_API_KEY="your_actual_bmc_api_key_here"
+export DEBUG="true"  # 启用调试模式
 ```
+
+#### 调试模式
+
+设置 `DEBUG=true` 环境变量可以启用详细的调试日志记录：
+
+**调试信息包括**：
+- 请求详情：方法、路径、请求头、请求体（格式化 JSON）
+- 响应详情：状态码、响应头、响应体（格式化 JSON）
+- MCP 请求详情：请求ID、方法、参数
+- HTTP 请求详情：完整的 HTTP 请求信息
+- HTTP 响应详情：完整的 HTTP 响应信息
+- 错误详情：详细的错误信息和上下文
+
+**使用方法**：
+```bash
+# 在 .env 文件中设置
+DEBUG=true
+
+# 或手动设置环境变量
+export DEBUG="true"
+
+# 运行程序，查看详细日志
+./bin/mcp2rest-stdio -config configs/bmc_api.yaml
+```
+
+**日志文件位置**：
+- 日志文件保存在 `logs/` 目录
+- 文件名格式：`server_pid_{PID}.log`
+- 每个进程一个独立的日志文件
 
 **重要说明**：
 - `.env` 文件包含敏感信息，不会被提交到版本控制中
 - 程序启动时会显示是否找到并加载了 `.env` 文件
 - 如果找到多个 `.env` 文件，会使用第一个找到的文件
 - 测试时可以使用提供的示例 API Key：`ded45a001ffb9c47b1e29fcbdd6bcec6`
+- 调试模式会记录详细的请求和响应信息，有助于问题排查
 
 ## 主要改进
 

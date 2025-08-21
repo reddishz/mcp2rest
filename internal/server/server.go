@@ -13,6 +13,7 @@ import (
 	"context"
 
 	"github.com/mcp2rest/internal/config"
+	"github.com/mcp2rest/internal/debug"
 	"github.com/mcp2rest/internal/handler"
 	"github.com/mcp2rest/pkg/mcp"
 	"github.com/mcp2rest/internal/logging"
@@ -160,23 +161,44 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.Logger.Printf("新的SSE连接: %s", r.RemoteAddr)
+	
+	// 记录调试信息
+	debug.LogInfo("SSE连接建立", map[string]interface{}{
+		"remote_addr": r.RemoteAddr,
+		"method":      r.Method,
+		"url":         r.URL.String(),
+		"headers":     r.Header,
+	})
 
 	// 处理POST请求（客户端发送消息）
 	if r.Method == "POST" {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			logging.Logger.Printf("读取请求体失败: %v", err)
+			debug.LogError("读取SSE请求体失败", err)
 			http.Error(w, "读取请求体失败", http.StatusBadRequest)
 			return
 		}
+
+		// 记录请求详情
+		debug.LogRequest("POST", r.URL.Path, map[string]string{
+			"Content-Type": r.Header.Get("Content-Type"),
+			"User-Agent":   r.Header.Get("User-Agent"),
+		}, body)
 
 		// 处理MCP请求
 		response, err := s.handleMCPRequest(body)
 		if err != nil {
 			logging.Logger.Printf("处理MCP请求失败: %v", err)
+			debug.LogError("处理MCP请求失败", err)
 			http.Error(w, "处理请求失败", http.StatusInternalServerError)
 			return
 		}
+
+		// 记录响应详情
+		debug.LogResponse(200, map[string]string{
+			"Content-Type": "text/event-stream",
+		}, response)
 
 		// 发送SSE响应
 		fmt.Fprintf(w, "data: %s\n\n", string(response))
@@ -344,6 +366,17 @@ func (s *Server) stdioWorker(requestChan <-chan *requestTask) {
 
 // processRequest 处理单个请求
 func (s *Server) processRequest(task *requestTask) {
+	// 记录请求详情
+	debug.LogRequest("STDIO", "stdin", map[string]string{
+		"Content-Type": "application/json",
+	}, task.data)
+
+	// 解析MCP请求以获取详细信息
+	var mcpRequest mcp.MCPRequest
+	if err := json.Unmarshal(task.data, &mcpRequest); err == nil {
+		debug.LogMCPRequest(fmt.Sprintf("%v", mcpRequest.ID), mcpRequest.Method, mcpRequest.Params)
+	}
+
 	// 设置请求超时
 	logging.Logger.Printf("处理请求，超时配置: %v", s.config.Global.Timeout)
 	ctx, cancel := context.WithTimeout(context.Background(), s.config.Global.Timeout)
@@ -378,6 +411,7 @@ func (s *Server) processRequest(task *requestTask) {
 		logging.Logger.Printf("请求处理完成")
 		if res.err != nil {
 			logging.Logger.Printf("处理MCP请求失败: %v", res.err)
+			debug.LogError("处理MCP请求失败", res.err)
 			// 直接使用 os.Stdout
 			errResp := mcp.NewErrorResponse("", -32603, fmt.Sprintf("处理请求失败: %v", res.err))
 			if response, err := json.Marshal(errResp); err == nil {
@@ -393,15 +427,22 @@ func (s *Server) processRequest(task *requestTask) {
 			return
 		}
 		
+		// 记录响应详情
+		debug.LogResponse(200, map[string]string{
+			"Content-Type": "application/json",
+		}, res.response)
+		
 		// 直接使用 os.Stdout，并检查写入错误
 		logging.Logger.Printf("发送响应: %s", string(res.response))
 		if _, err := os.Stdout.Write(res.response); err != nil {
 			logging.Logger.Printf("写入 stdout 失败: %v，Client 可能已断开连接")
+			debug.LogError("写入stdout失败", err)
 			s.cancel() // 触发关闭流程
 			return
 		}
 		if _, err := os.Stdout.Write([]byte("\n")); err != nil {
 			logging.Logger.Printf("写入换行符失败: %v，Client 可能已断开连接")
+			debug.LogError("写入换行符失败", err)
 			s.cancel() // 触发关闭流程
 			return
 		}

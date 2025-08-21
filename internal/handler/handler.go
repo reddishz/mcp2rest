@@ -11,6 +11,7 @@ import (
 
 	"github.com/mcp2rest/internal/auth"
 	"github.com/mcp2rest/internal/config"
+	"github.com/mcp2rest/internal/debug"
 	"github.com/mcp2rest/internal/openapi"
 	"github.com/mcp2rest/internal/transformer"
 	"github.com/mcp2rest/pkg/mcp"
@@ -48,20 +49,36 @@ func NewRequestHandler(cfg *config.Config, spec *config.OpenAPISpec) (*RequestHa
 
 // HandleRequest 处理工具调用请求
 func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCallResult, error) {
+	// 记录调试信息
+	debug.LogInfo("开始处理MCP工具调用", map[string]interface{}{
+		"tool_name": params.Name,
+		"params":    params.Parameters,
+	})
+
 	// 根据操作ID查找操作
 	operation, method, path, err := openapi.GetOperationByID(h.openAPISpec, params.Name)
 	if err != nil {
+		debug.LogError("查找操作失败", err)
 		return nil, fmt.Errorf("查找操作失败: %w", err)
 	}
 
 	// 构建HTTP请求
 	req, err := h.buildHTTPRequest(operation, method, path, params.Parameters)
 	if err != nil {
+		debug.LogError("构建HTTP请求失败", err)
 		return nil, fmt.Errorf("构建HTTP请求失败: %w", err)
 	}
 
+	// 记录HTTP请求详情
+	debug.LogHTTPRequest(map[string]interface{}{
+		"method":  req.Method,
+		"url":     req.URL.String(),
+		"headers": req.Header,
+	})
+
 	// 添加身份验证
 	if err := h.applyAuthentication(req, operation); err != nil {
+		debug.LogError("应用身份验证失败", err)
 		return nil, fmt.Errorf("应用身份验证失败: %w", err)
 	}
 
@@ -73,6 +90,7 @@ func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCal
 	// 发送请求
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
+		debug.LogError("发送HTTP请求失败", err)
 		return nil, fmt.Errorf("发送HTTP请求失败: %w", err)
 	}
 	defer resp.Body.Close()
@@ -80,8 +98,16 @@ func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCal
 	// 读取响应体
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
+		debug.LogError("读取响应体失败", err)
 		return nil, fmt.Errorf("读取响应体失败: %w", err)
 	}
+
+	// 记录HTTP响应详情
+	debug.LogHTTPResponse(map[string]interface{}{
+		"status_code": resp.StatusCode,
+		"headers":     resp.Header,
+		"body":        string(body),
+	})
 
 	// 检查状态码
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -91,6 +117,7 @@ func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCal
 		} else if resp.StatusCode >= 500 {
 			errorMsg = "服务器错误"
 		}
+		debug.LogError("API返回错误状态码", fmt.Errorf("状态码: %d, 消息: %s", resp.StatusCode, errorMsg))
 		return &mcp.ToolCallResult{
 			Type:   "error",
 			Status: "error",
@@ -105,6 +132,7 @@ func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCal
 	// 转换响应
 	result, err := h.transformer.TransformResponse(body, operation.Responses)
 	if err != nil {
+		debug.LogError("转换响应失败", err)
 		return nil, fmt.Errorf("转换响应失败: %w", err)
 	}
 

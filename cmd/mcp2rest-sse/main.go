@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mcp2rest/internal/config"
+	"github.com/mcp2rest/internal/debug"
 	"github.com/mcp2rest/internal/logging"
 	"github.com/mcp2rest/internal/openapi"
 	"github.com/mcp2rest/internal/server"
@@ -24,6 +25,9 @@ func main() {
 	if err := logging.InitLogger(); err != nil {
 		log.Fatalf("初始化日志失败: %v", err)
 	}
+
+	// 初始化调试模式
+	debug.InitDebug()
 
 	// 记录启动信息
 	logging.Logger.Println("===== 启动 MCP2REST-SSE 服务器 =====")
