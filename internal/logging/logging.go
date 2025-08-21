@@ -15,10 +15,10 @@ func InitLogger() error {
 	if err != nil {
 		return fmt.Errorf("无法获取可执行文件路径: %v", err)
 	}
-	
+
 	// 获取可执行文件所在目录
 	exeDir := filepath.Dir(exePath)
-	
+
 	// 如果可执行文件在 bin 目录下，使用上级目录
 	if filepath.Base(exeDir) == "bin" {
 		exeDir = filepath.Dir(exeDir)
@@ -38,9 +38,13 @@ func InitLogger() error {
 
 	// 获取当前进程ID
 	pid := os.Getpid()
-	
-	// 生成按进程ID命名的日志文件名
-	logFile := filepath.Join(logDir, fmt.Sprintf("server_pid_%d.log", pid))
+
+	// 获取可执行文件名(不带路径和扩展名)
+	exeName := filepath.Base(exePath)
+	exeName = exeName[:len(exeName)-len(filepath.Ext(exeName))]
+
+	// 生成按可执行文件名和进程ID命名的日志文件名
+	logFile := filepath.Join(logDir, fmt.Sprintf("%s_pid_%d.log", exeName, pid))
 
 	// 强制创建日志文件
 	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -51,4 +55,3 @@ func InitLogger() error {
 	Logger = log.New(file, "", log.Ldate|log.Ltime|log.Lshortfile)
 	return nil
 }
-

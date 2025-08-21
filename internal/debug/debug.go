@@ -1,7 +1,10 @@
 package debug
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -17,7 +20,7 @@ var (
 func InitDebug() {
 	debugEnv := os.Getenv("DEBUG")
 	IsDebugEnabled = debugEnv == "true" || debugEnv == "1" || debugEnv == "yes"
-	
+
 	if IsDebugEnabled {
 		logging.Logger.Printf("=== 调试模式已启用 ===")
 		logging.Logger.Printf("DEBUG 环境变量: %s", debugEnv)
@@ -36,14 +39,14 @@ func LogRequest(method, path string, headers map[string]string, body []byte) {
 	logging.Logger.Printf("时间: %s", time.Now().Format("2006-01-02 15:04:05.000"))
 	logging.Logger.Printf("方法: %s", method)
 	logging.Logger.Printf("路径: %s", path)
-	
+
 	if len(headers) > 0 {
 		logging.Logger.Printf("请求头:")
 		for key, value := range headers {
 			logging.Logger.Printf("  %s: %s", key, value)
 		}
 	}
-	
+
 	if len(body) > 0 {
 		logging.Logger.Printf("请求体:")
 		if isJSON(body) {
@@ -74,14 +77,16 @@ func LogResponse(statusCode int, headers map[string]string, body []byte) {
 	logging.Logger.Printf("=== 响应详情 ===")
 	logging.Logger.Printf("时间: %s", time.Now().Format("2006-01-02 15:04:05.000"))
 	logging.Logger.Printf("状态码: %d", statusCode)
-	
+
 	if len(headers) > 0 {
 		logging.Logger.Printf("响应头:")
 		for key, value := range headers {
 			logging.Logger.Printf("  %s: %s", key, value)
 		}
+	} else {
+		logging.Logger.Printf("响应头: 无")
 	}
-	
+
 	if len(body) > 0 {
 		logging.Logger.Printf("响应体:")
 		if isJSON(body) {
@@ -99,8 +104,60 @@ func LogResponse(statusCode int, headers map[string]string, body []byte) {
 		} else {
 			logging.Logger.Printf("  %s", string(body))
 		}
+	} else {
+		logging.Logger.Printf("响应体: 空")
 	}
 	logging.Logger.Printf("=== 响应详情结束 ===")
+}
+
+// LogHTTPResponse 记录 HTTP 响应详情
+func LogHTTPResponse(resp *http.Response) {
+	if !IsDebugEnabled {
+		return
+	}
+
+	logging.Logger.Printf("=== HTTP 响应详情 ===")
+	logging.Logger.Printf("时间: %s", time.Now().Format("2006-01-02 15:04:05.000"))
+	logging.Logger.Printf("状态码: %d", resp.StatusCode)
+
+	if resp.Header != nil && len(resp.Header) > 0 {
+		logging.Logger.Printf("响应头:")
+		for key, values := range resp.Header {
+			for _, value := range values {
+				logging.Logger.Printf("  %s: %s", key, value)
+			}
+		}
+	} else {
+		logging.Logger.Printf("响应头: 无")
+	}
+
+	if resp.Body != nil {
+		body, err := io.ReadAll(resp.Body)
+		if err == nil {
+			resp.Body = io.NopCloser(bytes.NewBuffer(body)) // 恢复读取后的body
+			logging.Logger.Printf("响应体:")
+			if isJSON(body) {
+				// 格式化 JSON
+				var prettyJSON interface{}
+				if err := json.Unmarshal(body, &prettyJSON); err == nil {
+					if prettyBytes, err := json.MarshalIndent(prettyJSON, "", "  "); err == nil {
+						logging.Logger.Printf("  %s", string(prettyBytes))
+					} else {
+						logging.Logger.Printf("  %s", string(body))
+					}
+				} else {
+					logging.Logger.Printf("  %s", string(body))
+				}
+			} else {
+				logging.Logger.Printf("  %s", string(body))
+			}
+		} else {
+			logging.Logger.Printf("读取响应体失败: %v", err)
+		}
+	} else {
+		logging.Logger.Printf("响应体: 空")
+	}
+	logging.Logger.Printf("=== HTTP 响应详情结束 ===")
 }
 
 // LogMCPRequest 记录 MCP 请求详情
@@ -113,7 +170,7 @@ func LogMCPRequest(requestID string, method string, params interface{}) {
 	logging.Logger.Printf("时间: %s", time.Now().Format("2006-01-02 15:04:05.000"))
 	logging.Logger.Printf("请求ID: %s", requestID)
 	logging.Logger.Printf("方法: %s", method)
-	
+
 	if params != nil {
 		logging.Logger.Printf("参数:")
 		if prettyBytes, err := json.MarshalIndent(params, "", "  "); err == nil {
@@ -134,7 +191,7 @@ func LogMCPResponse(requestID string, result interface{}, error interface{}) {
 	logging.Logger.Printf("=== MCP 响应详情 ===")
 	logging.Logger.Printf("时间: %s", time.Now().Format("2006-01-02 15:04:05.000"))
 	logging.Logger.Printf("请求ID: %s", requestID)
-	
+
 	if error != nil {
 		logging.Logger.Printf("错误:")
 		if prettyBytes, err := json.MarshalIndent(error, "", "  "); err == nil {
@@ -163,18 +220,6 @@ func LogHTTPRequest(req interface{}) {
 	logging.Logger.Printf("时间: %s", time.Now().Format("2006-01-02 15:04:05.000"))
 	logging.Logger.Printf("请求对象: %+v", req)
 	logging.Logger.Printf("=== HTTP 请求详情结束 ===")
-}
-
-// LogHTTPResponse 记录 HTTP 响应详情
-func LogHTTPResponse(resp interface{}) {
-	if !IsDebugEnabled {
-		return
-	}
-
-	logging.Logger.Printf("=== HTTP 响应详情 ===")
-	logging.Logger.Printf("时间: %s", time.Now().Format("2006-01-02 15:04:05.000"))
-	logging.Logger.Printf("响应对象: %+v", resp)
-	logging.Logger.Printf("=== HTTP 响应详情结束 ===")
 }
 
 // LogError 记录错误详情
@@ -216,15 +261,15 @@ func FormatJSON(data []byte) string {
 	if !isJSON(data) {
 		return string(data)
 	}
-	
+
 	var js interface{}
 	if err := json.Unmarshal(data, &js); err != nil {
 		return string(data)
 	}
-	
+
 	if prettyBytes, err := json.MarshalIndent(js, "", "  "); err == nil {
 		return string(prettyBytes)
 	}
-	
+
 	return string(data)
 }

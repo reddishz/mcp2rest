@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,13 +11,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"context"
 
 	"github.com/mcp2rest/internal/config"
 	"github.com/mcp2rest/internal/debug"
 	"github.com/mcp2rest/internal/handler"
-	"github.com/mcp2rest/pkg/mcp"
 	"github.com/mcp2rest/internal/logging"
+	"github.com/mcp2rest/pkg/mcp"
 )
 
 // Server MCP服务器
@@ -33,14 +33,14 @@ type Server struct {
 // NewServer 创建新的服务器实例
 func NewServer(cfg *config.Config, spec *config.OpenAPISpec) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	// 创建请求处理器
 	reqHandler, err := handler.NewRequestHandler(cfg, spec)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("创建请求处理器失败: %w", err)
 	}
-	
+
 	return &Server{
 		config:      cfg,
 		openAPISpec: spec,
@@ -67,12 +67,12 @@ func (s *Server) Start() error {
 func (s *Server) Stop() error {
 	logging.Logger.Println("正在停止服务器...")
 	s.cancel()
-	
+
 	// 关闭HTTP服务器
 	if s.httpServer != nil {
 		return s.httpServer.Shutdown(context.Background())
 	}
-	
+
 	// 安全关闭 done 通道
 	select {
 	case <-s.done:
@@ -80,7 +80,7 @@ func (s *Server) Stop() error {
 	default:
 		close(s.done)
 	}
-	
+
 	return nil
 }
 
@@ -88,7 +88,7 @@ func (s *Server) Stop() error {
 func (s *Server) StopWithContext(ctx context.Context) error {
 	logging.Logger.Println("正在停止服务器...")
 	s.cancel()
-	
+
 	// 等待 done 通道或上下文超时
 	select {
 	case <-s.done:
@@ -151,6 +151,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
 
 	// 创建SSE写入器
@@ -161,7 +162,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.Logger.Printf("新的SSE连接: %s", r.RemoteAddr)
-	
+
 	// 记录调试信息
 	debug.LogInfo("SSE连接建立", map[string]interface{}{
 		"remote_addr": r.RemoteAddr,
@@ -196,9 +197,11 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 记录响应详情
-		debug.LogResponse(200, map[string]string{
-			"Content-Type": "text/event-stream",
-		}, response)
+		responseHeaders := make(map[string]string)
+		for key, values := range w.Header() {
+			responseHeaders[key] = values[0] // 取第一个值
+		}
+		debug.LogResponse(200, responseHeaders, response)
 
 		// 发送SSE响应
 		fmt.Fprintf(w, "data: %s\n\n", string(response))
@@ -232,18 +235,18 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 // startStdioServer 启动标准输入/输出服务器
 func (s *Server) startStdioServer() error {
 	logging.Logger.Println("启动标准输入/输出服务器")
-	
+
 	// 创建带缓冲的读取器和写入器
-	reader := bufio.NewReaderSize(os.Stdin, 64*1024) // 64KB 缓冲区
+	reader := bufio.NewReaderSize(os.Stdin, 64*1024)   // 64KB 缓冲区
 	writer := bufio.NewWriterSize(os.Stdout, 256*1024) // 256KB 缓冲区
 	defer writer.Flush()
-	
+
 	// 创建请求通道，用于并发处理
 	requestChan := make(chan *requestTask, 100) // 缓冲通道
-	
+
 	// 使用 WaitGroup 确保所有协程正确退出
 	var wg sync.WaitGroup
-	
+
 	// 启动工作协程池
 	workerCount := 4 // 可以根据需要调整
 	for i := 0; i < workerCount; i++ {
@@ -255,7 +258,7 @@ func (s *Server) startStdioServer() error {
 			logging.Logger.Printf("工作协程 %d 已退出", workerID)
 		}(i)
 	}
-	
+
 	// 启动读取协程
 	wg.Add(1)
 	go func() {
@@ -269,9 +272,9 @@ func (s *Server) startStdioServer() error {
 			// 确保在读取协程退出时关闭服务器
 			s.cancel()
 		}()
-		
+
 		logging.Logger.Println("启动读取协程")
-		
+
 		for {
 			// 首先检查上下文是否已取消
 			select {
@@ -281,10 +284,10 @@ func (s *Server) startStdioServer() error {
 			default:
 				// 继续读取
 			}
-			
+
 			// 直接读取，不使用超时，让系统自然处理 EOF
 			line, err := reader.ReadString('\n')
-			
+
 			if err != nil {
 				if err == io.EOF {
 					logging.Logger.Println("标准输入已关闭 (EOF)，这是最重要的关闭信号")
@@ -296,18 +299,18 @@ func (s *Server) startStdioServer() error {
 				s.sendErrorResponse(writer, "", -32700, fmt.Sprintf("读取输入失败: %v", err))
 				continue
 			}
-			
+
 			// 去除换行符和空白字符
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue // 跳过空行
 			}
-			
+
 			// 创建请求任务
 			task := &requestTask{
 				data: []byte(line),
 			}
-			
+
 			// 发送到工作协程池
 			select {
 			case requestChan <- task:
@@ -321,17 +324,17 @@ func (s *Server) startStdioServer() error {
 			}
 		}
 	}()
-	
+
 	// 等待上下文取消
 	logging.Logger.Println("等待服务器停止信号...")
 	<-s.ctx.Done()
 	logging.Logger.Println("标准输入/输出服务器收到停止信号")
-	
+
 	// 等待所有协程退出
 	logging.Logger.Println("等待所有协程退出...")
 	wg.Wait()
 	logging.Logger.Println("所有协程已退出")
-	
+
 	// 安全关闭 done 通道
 	select {
 	case <-s.done:
@@ -339,7 +342,7 @@ func (s *Server) startStdioServer() error {
 	default:
 		close(s.done)
 	}
-	
+
 	logging.Logger.Println("标准输入/输出服务器已停止")
 	return nil
 }
@@ -381,21 +384,21 @@ func (s *Server) processRequest(task *requestTask) {
 	logging.Logger.Printf("处理请求，超时配置: %v", s.config.Global.Timeout)
 	ctx, cancel := context.WithTimeout(context.Background(), s.config.Global.Timeout)
 	defer cancel()
-	
+
 	// 使用通道进行超时控制，减少协程使用
 	type result struct {
 		response []byte
 		err      error
 	}
-	
+
 	resultChan := make(chan result, 1)
-	
+
 	// 启动处理协程
 	go func() {
 		response, err := s.handleMCPRequest(task.data)
 		resultChan <- result{response: response, err: err}
 	}()
-	
+
 	// 等待处理完成或超时
 	logging.Logger.Printf("等待请求处理完成...")
 	select {
@@ -420,18 +423,18 @@ func (s *Server) processRequest(task *requestTask) {
 			}
 			return
 		}
-		
+
 		// 检查响应是否为空（通知类型的请求）
 		if res.response == nil {
 			logging.Logger.Printf("通知类型请求，无需发送响应")
 			return
 		}
-		
+
 		// 记录响应详情
 		debug.LogResponse(200, map[string]string{
 			"Content-Type": "application/json",
 		}, res.response)
-		
+
 		// 直接使用 os.Stdout，并检查写入错误
 		logging.Logger.Printf("发送响应: %s", string(res.response))
 		if _, err := os.Stdout.Write(res.response); err != nil {
@@ -456,22 +459,22 @@ func (s *Server) writeResponse(writer *bufio.Writer, response []byte) error {
 	if _, err := writer.Write(response); err != nil {
 		return fmt.Errorf("写入响应数据失败: %w", err)
 	}
-	
+
 	// 立即刷新，确保数据被写入
 	if err := writer.Flush(); err != nil {
 		return fmt.Errorf("刷新缓冲区失败: %w", err)
 	}
-	
+
 	// 写入换行符
 	if err := writer.WriteByte('\n'); err != nil {
 		return fmt.Errorf("写入换行符失败: %w", err)
 	}
-	
+
 	// 再次刷新，确保换行符被写入
 	if err := writer.Flush(); err != nil {
 		return fmt.Errorf("刷新缓冲区失败: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -483,7 +486,7 @@ func (s *Server) sendErrorResponse(writer *bufio.Writer, id string, code int, me
 		logging.Logger.Printf("序列化错误响应失败: %v", err)
 		return
 	}
-	
+
 	if err := s.writeResponse(writer, response); err != nil {
 		logging.Logger.Printf("发送错误响应失败: %v", err)
 	}
@@ -498,17 +501,17 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 		errResp := mcp.NewErrorResponse("", -32700, "解析请求失败")
 		return json.Marshal(errResp)
 	}
-	
+
 	// 记录请求信息
 	logging.Logger.Printf("收到MCP请求: ID=%s, Method=%s", request.GetIDString(), request.Method)
-	
+
 	// 验证请求格式
 	if request.JSONRPC != "2.0" {
 		logging.Logger.Printf("不支持的JSON-RPC版本: %s", request.JSONRPC)
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32600, "不支持的JSON-RPC版本")
 		return json.Marshal(errResp)
 	}
-	
+
 	// 处理不同的方法
 	switch request.Method {
 	case "initialize":
@@ -519,8 +522,8 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 		return s.handleCancelled(request)
 	case "tools/list":
 		return s.handleToolsList(request)
-			case "toolCall", "tools/call":
-			return s.handleToolCall(request)
+	case "toolCall", "tools/call":
+		return s.handleToolCall(request)
 	case "exit":
 		return s.handleExit(request)
 	default:
@@ -533,14 +536,14 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 // handleInitialize 处理初始化请求
 func (s *Server) handleInitialize(request mcp.MCPRequest) ([]byte, error) {
 	logging.Logger.Printf("处理初始化请求")
-	
+
 	// 解析初始化参数
 	var initParams struct {
 		ProtocolVersion string `json:"protocolVersion"`
 		Capabilities    struct {
-			Tools      map[string]interface{} `json:"tools"`
-			Resources  map[string]interface{} `json:"resources"`
-			Logging    map[string]interface{} `json:"logging"`
+			Tools          map[string]interface{} `json:"tools"`
+			Resources      map[string]interface{} `json:"resources"`
+			Logging        map[string]interface{} `json:"logging"`
 			StreamableHttp map[string]interface{} `json:"streamableHttp"`
 		} `json:"capabilities"`
 		ClientInfo struct {
@@ -548,25 +551,25 @@ func (s *Server) handleInitialize(request mcp.MCPRequest) ([]byte, error) {
 			Version string `json:"version"`
 		} `json:"clientInfo"`
 	}
-	
+
 	if err := json.Unmarshal(request.Params, &initParams); err != nil {
 		logging.Logger.Printf("解析初始化参数失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32602, "无效的初始化参数")
 		return json.Marshal(errResp)
 	}
-	
+
 	logging.Logger.Printf("客户端信息: %s v%s", initParams.ClientInfo.Name, initParams.ClientInfo.Version)
 	logging.Logger.Printf("协议版本: %s", initParams.ProtocolVersion)
-	
+
 	// 构建初始化响应
 	initResult := map[string]interface{}{
-					"protocolVersion": "20241105",
+		"protocolVersion": "20241105",
 		"capabilities": map[string]interface{}{
 			"tools": map[string]interface{}{
 				"listChanged": true,
 			},
 			"resources": map[string]interface{}{
-				"subscribe": true,
+				"subscribe":   true,
 				"unsubscribe": true,
 			},
 			"logging": map[string]interface{}{
@@ -576,26 +579,26 @@ func (s *Server) handleInitialize(request mcp.MCPRequest) ([]byte, error) {
 				"request": true,
 			},
 		},
-					"serverInfo": map[string]interface{}{
-				"name":    getServerName(s.config.Server.Mode),
-				"version": "1.0.0",
-			},
+		"serverInfo": map[string]interface{}{
+			"name":    getServerName(s.config.Server.Mode),
+			"version": "1.0.0",
+		},
 	}
-	
+
 	response, err := mcp.NewSuccessResponse(request.GetIDString(), initResult)
 	if err != nil {
 		logging.Logger.Printf("创建初始化响应失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, "创建响应失败")
 		return json.Marshal(errResp)
 	}
-	
+
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		logging.Logger.Printf("序列化初始化响应失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, "序列化响应失败")
 		return json.Marshal(errResp)
 	}
-	
+
 	logging.Logger.Printf("初始化响应发送成功")
 	return responseBytes, nil
 }
@@ -603,7 +606,7 @@ func (s *Server) handleInitialize(request mcp.MCPRequest) ([]byte, error) {
 // handleInitialized 处理初始化完成通知
 func (s *Server) handleInitialized(request mcp.MCPRequest) ([]byte, error) {
 	logging.Logger.Printf("处理初始化完成通知")
-	
+
 	// 对于通知类型的请求，不需要返回响应
 	return nil, nil
 }
@@ -611,7 +614,7 @@ func (s *Server) handleInitialized(request mcp.MCPRequest) ([]byte, error) {
 // handleCancelled 处理取消通知
 func (s *Server) handleCancelled(request mcp.MCPRequest) ([]byte, error) {
 	logging.Logger.Printf("处理取消通知")
-	
+
 	// 对于通知类型的请求，不需要返回响应
 	return nil, nil
 }
@@ -619,20 +622,20 @@ func (s *Server) handleCancelled(request mcp.MCPRequest) ([]byte, error) {
 // handleExit 处理退出请求
 func (s *Server) handleExit(request mcp.MCPRequest) ([]byte, error) {
 	logging.Logger.Printf("收到退出请求，准备关闭服务器")
-	
+
 	// 发送退出响应
 	response, err := mcp.NewSuccessResponse(request.GetIDString(), nil)
 	if err != nil {
 		logging.Logger.Printf("创建退出响应失败: %v", err)
 		return nil, err
 	}
-	
+
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		logging.Logger.Printf("序列化退出响应失败: %v", err)
 		return nil, err
 	}
-	
+
 	// 立即关闭服务器
 	logging.Logger.Printf("执行退出操作")
 	go func() {
@@ -642,36 +645,36 @@ func (s *Server) handleExit(request mcp.MCPRequest) ([]byte, error) {
 		// 强制退出进程
 		os.Exit(0)
 	}()
-	
+
 	return responseBytes, nil
 }
 
 // handleToolsList 处理工具列表请求
 func (s *Server) handleToolsList(request mcp.MCPRequest) ([]byte, error) {
 	logging.Logger.Printf("处理工具列表请求")
-	
+
 	// 获取所有可用的工具名称
 	tools := s.handler.GetAvailableTools()
-	
+
 	// 构建工具列表响应
 	toolsListResult := map[string]interface{}{
 		"tools": tools,
 	}
-	
+
 	response, err := mcp.NewSuccessResponse(request.GetIDString(), toolsListResult)
 	if err != nil {
 		logging.Logger.Printf("创建工具列表响应失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, "创建响应失败")
 		return json.Marshal(errResp)
 	}
-	
+
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		logging.Logger.Printf("序列化工具列表响应失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, "序列化响应失败")
 		return json.Marshal(errResp)
 	}
-	
+
 	logging.Logger.Printf("工具列表响应发送成功，包含 %d 个工具", len(tools))
 	return responseBytes, nil
 }
@@ -680,7 +683,7 @@ func (s *Server) handleToolsList(request mcp.MCPRequest) ([]byte, error) {
 func (s *Server) handleToolCall(request mcp.MCPRequest) ([]byte, error) {
 	// 记录请求开始时间
 	startTime := time.Now()
-	
+
 	// 解析工具调用参数
 	toolParams, err := mcp.ParseToolCallParams(request.Params)
 	if err != nil {
@@ -688,17 +691,17 @@ func (s *Server) handleToolCall(request mcp.MCPRequest) ([]byte, error) {
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32602, fmt.Sprintf("无效的参数: %v", err))
 		return json.Marshal(errResp)
 	}
-	
+
 	// 处理工具名称前缀
 	originalName := toolParams.Name
 	if strings.HasPrefix(toolParams.Name, "mcp_") {
 		toolParams.Name = strings.TrimPrefix(toolParams.Name, "mcp_")
 		logging.Logger.Printf("检测到 mcp_ 前缀，将工具名称从 %s 改为 %s", originalName, toolParams.Name)
 	}
-	
+
 	// 记录工具调用信息
 	logging.Logger.Printf("工具调用: %s (原始名称: %s), 参数: %+v", toolParams.Name, originalName, toolParams.Parameters)
-	
+
 	// 处理请求
 	result, err := s.handler.HandleRequest(toolParams)
 	if err != nil {
@@ -706,7 +709,7 @@ func (s *Server) handleToolCall(request mcp.MCPRequest) ([]byte, error) {
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, fmt.Sprintf("内部错误: %v", err))
 		return json.Marshal(errResp)
 	}
-	
+
 	// 创建成功响应
 	response, err := mcp.NewSuccessResponse(request.GetIDString(), result)
 	if err != nil {
@@ -714,7 +717,7 @@ func (s *Server) handleToolCall(request mcp.MCPRequest) ([]byte, error) {
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, fmt.Sprintf("创建响应失败: %v", err))
 		return json.Marshal(errResp)
 	}
-	
+
 	// 序列化响应
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
@@ -722,10 +725,10 @@ func (s *Server) handleToolCall(request mcp.MCPRequest) ([]byte, error) {
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, fmt.Sprintf("序列化响应失败: %v", err))
 		return json.Marshal(errResp)
 	}
-	
+
 	// 记录处理时间
 	duration := time.Since(startTime)
 	logging.Logger.Printf("工具调用处理完成: ID=%s, 耗时=%v", request.GetIDString(), duration)
-	
+
 	return responseBytes, nil
 }

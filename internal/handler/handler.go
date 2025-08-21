@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -101,13 +102,11 @@ func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCal
 		debug.LogError("读取响应体失败", err)
 		return nil, fmt.Errorf("读取响应体失败: %w", err)
 	}
-
 	// 记录HTTP响应详情
-	debug.LogHTTPResponse(map[string]interface{}{
-		"status_code": resp.StatusCode,
-		"headers":     resp.Header,
-		"body":        string(body),
-	})
+	if resp != nil {
+		resp.Body = io.NopCloser(bytes.NewBuffer(body))
+		debug.LogHTTPResponse(resp)
+	}
 
 	// 检查状态码
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -201,23 +200,23 @@ func (h *RequestHandler) buildHTTPRequest(operation *config.Operation, method, p
 					}
 				}
 			}
-			
+
 			// 如果没有从参数中获取到请求体，尝试使用整个参数对象
 			if len(requestBody) == 0 && len(params) > 0 {
 				requestBody = params
 			}
-			
+
 			body, err = json.Marshal(requestBody)
 			if err != nil {
 				return nil, fmt.Errorf("序列化请求体失败: %w", err)
 			}
 		}
-		
+
 		req, err = http.NewRequest(method, fullURL, bytes.NewBuffer(body))
 		if err != nil {
 			return nil, fmt.Errorf("创建HTTP请求失败: %w", err)
 		}
-		
+
 		// 设置Content-Type
 		req.Header.Set("Content-Type", "application/json")
 	} else {
@@ -276,58 +275,58 @@ func (h *RequestHandler) applyAuthentication(req *http.Request, operation *confi
 // GetAvailableTools 获取可用的工具列表
 func (h *RequestHandler) GetAvailableTools() []map[string]interface{} {
 	var tools []map[string]interface{}
-	
+
 	// 预分配切片容量，减少内存分配
 	tools = make([]map[string]interface{}, 0, len(h.openAPISpec.Paths)*2)
-	
+
 	// 遍历 OpenAPI 规范中的所有操作
 	for path, pathItem := range h.openAPISpec.Paths {
 		for method, operation := range pathItem {
 			if !isHTTPMethod(method) {
 				continue
 			}
-			
+
 			// 生成操作 ID
 			operationID := generateOperationID(method, path)
-			
+
 			// 预分配 map 容量
 			tool := make(map[string]interface{}, 3)
 			inputSchema := make(map[string]interface{}, 3)
-			
+
 			// 构建工具信息
 			tool["name"] = operationID
 			tool["description"] = operation.Description
-			
+
 			inputSchema["type"] = "object"
 			inputSchema["properties"] = make(map[string]interface{})
 			inputSchema["required"] = make([]string, 0)
-			
+
 			tool["inputSchema"] = inputSchema
-			
+
 			// 添加参数信息
 			if len(operation.Parameters) > 0 {
 				properties := make(map[string]interface{}, len(operation.Parameters))
 				required := make([]string, 0, len(operation.Parameters))
-				
+
 				for _, param := range operation.Parameters {
 					properties[param.Name] = map[string]interface{}{
 						"type":        getSchemaType(param.Schema),
 						"description": param.Description,
 					}
-					
+
 					if param.Required {
 						required = append(required, param.Name)
 					}
 				}
-				
+
 				inputSchema["properties"] = properties
 				inputSchema["required"] = required
 			}
-			
+
 			tools = append(tools, tool)
 		}
 	}
-	
+
 	return tools
 }
 
@@ -342,26 +341,26 @@ func isHTTPMethod(method string) bool {
 func generateOperationID(method, path string) string {
 	// 移除路径开头的斜杠
 	path = strings.TrimPrefix(path, "/")
-	
+
 	// 将路径转换为驼峰命名
 	parts := strings.Split(path, "/")
 	var result []string
-	
+
 	for _, part := range parts {
 		// 移除路径参数
 		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
 			continue
 		}
-		
+
 		// 转换为驼峰命名
 		if len(part) > 0 {
 			result = append(result, strings.Title(part))
 		}
 	}
-	
+
 	// 组合方法名和路径
 	operationID := strings.ToLower(method) + strings.Join(result, "")
-	
+
 	return operationID
 }
 
@@ -370,7 +369,7 @@ func getSchemaType(schema config.Schema) string {
 	if schema.Type != "" {
 		return schema.Type
 	}
-	
+
 	// 根据其他属性推断类型
 	if schema.Format != "" {
 		switch schema.Format {
@@ -384,7 +383,7 @@ func getSchemaType(schema config.Schema) string {
 			return "string"
 		}
 	}
-	
+
 	// 默认类型
 	return "string"
 }
