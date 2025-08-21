@@ -420,30 +420,59 @@ func main() {
 	time.Sleep(2 * time.Second)
 	fmt.Println("服务器启动后进程数:", getProcessCount("mcp2rest"))
 
-	// 初始化 MCP 连接
-	fmt.Println("初始化 MCP 连接...")
+	// 测试基本功能
+	fmt.Println("=== 测试基本功能 ===")
+	
+	// 1. 测试初始化
+	fmt.Println("1. 测试初始化...")
 	if err := client.Initialize(); err != nil {
 		log.Fatalf("初始化 MCP 连接失败: %v", err)
 	}
+	fmt.Println("✅ 初始化成功")
 
-	// 发送初始化完成通知
+	// 2. 测试发送初始化完成通知
+	fmt.Println("2. 测试发送初始化完成通知...")
 	if err := client.SendInitialized(); err != nil {
 		log.Fatalf("发送初始化完成通知失败: %v", err)
 	}
+	fmt.Println("✅ 初始化完成通知发送成功")
 
-	// 获取可用工具列表
-	fmt.Println("获取可用工具列表...")
+	// 3. 测试获取工具列表
+	fmt.Println("3. 测试获取工具列表...")
 	tools, err := client.GetToolsList()
 	if err != nil {
 		log.Fatalf("获取工具列表失败: %v", err)
 	}
 
-	fmt.Printf("发现 %d 个可用工具:\n", len(tools))
+	fmt.Printf("✅ 发现 %d 个可用工具:\n", len(tools))
 	for i, tool := range tools {
 		name := tool["name"].(string)
 		description := tool["description"].(string)
 		fmt.Printf("  %d. %s: %s\n", i+1, name, description)
 	}
+
+	// 4. 测试工具调用
+	fmt.Println("4. 测试工具调用...")
+	if len(tools) > 0 {
+		firstTool := tools[0]
+		toolName := firstTool["name"].(string)
+		
+		fmt.Printf("测试调用工具: %s\n", toolName)
+		response, err := client.SendRequest("toolCall", map[string]interface{}{
+			"name":       toolName,
+			"parameters": map[string]interface{}{},
+		})
+		
+		if err != nil {
+			fmt.Printf("❌ 工具调用失败: %v\n", err)
+		} else if response.Error != nil {
+			fmt.Printf("❌ 工具调用返回错误: %+v\n", response.Error)
+		} else {
+			fmt.Printf("✅ 工具调用成功\n")
+		}
+	}
+
+	fmt.Println("=== 基本功能测试完成 ===")
 
 	// 创建测试套件
 	testSuite := NewTestSuite(client)
