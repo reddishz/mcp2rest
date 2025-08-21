@@ -106,7 +106,8 @@ func TryLoadServerConfig() (*ServerConfig, *GlobalConfig, error) {
 	// 检查文件是否存在
 	if _, err := os.Stat(serverConfigPath); os.IsNotExist(err) {
 		// 文件不存在，返回默认配置
-		return GetDefaultServerConfig()
+		server, global := GetDefaultServerConfig()
+		return server, global, nil
 	}
 	
 	// 文件存在，尝试加载

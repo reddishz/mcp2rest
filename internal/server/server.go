@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -158,7 +159,7 @@ func (s *Server) startStdioServer() error {
 				return
 			default:
 				// 从标准输入读取
-				n, err := fmt.Stdin.Read(buffer[:])
+				n, err := os.Stdin.Read(buffer[:])
 				if err != nil {
 					log.Printf("从标准输入读取失败: %v", err)
 					continue
@@ -172,7 +173,7 @@ func (s *Server) startStdioServer() error {
 				}
 
 				// 写入标准输出
-				if _, err := fmt.Stdout.Write(response); err != nil {
+				if _, err := os.Stdout.Write(response); err != nil {
 					log.Printf("写入标准输出失败: %v", err)
 				}
 				fmt.Println() // 添加换行符

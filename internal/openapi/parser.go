@@ -173,7 +173,7 @@ func ConvertToEndpoints(spec *OpenAPISpec) []config.EndpointConfig {
 			if operation.RequestBody.Content != nil {
 				for _, mediaType := range operation.RequestBody.Content {
 					if mediaType.Schema.Properties != nil {
-						for name, schema := range mediaType.Schema.Properties {
+						for name := range mediaType.Schema.Properties {
 							required := false
 							for _, req := range mediaType.Schema.Required {
 								if req == name {
@@ -184,7 +184,7 @@ func ConvertToEndpoints(spec *OpenAPISpec) []config.EndpointConfig {
 							parameter := config.ParameterConfig{
 								Name:        name,
 								Required:    required,
-								Description: schema.Description,
+								Description: "", // OpenAPI schema 中没有 Description 字段
 								In:          "body",
 							}
 							parameters = append(parameters, parameter)
