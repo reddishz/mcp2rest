@@ -112,7 +112,11 @@ go build -o bin/mcp2rest cmd/mcp2rest/main.go
 
 ### 环境变量配置
 
-MCP2REST 使用环境变量来配置 API 认证信息。请按以下步骤配置：
+MCP2REST 使用环境变量来配置 API 认证信息，**支持自动加载 `.env` 文件**。
+
+#### 自动加载（推荐）
+
+程序启动时会自动查找并加载 `.env` 文件，无需手动设置环境变量：
 
 1. **复制环境变量模板**：
 ```bash
@@ -127,7 +131,23 @@ APIKEYAUTH_API_KEY=your_actual_bmc_api_key_here
 # 其他配置...
 ```
 
-3. **加载环境变量**：
+3. **直接运行程序**：
+```bash
+./bin/mcp2rest-stdio -config configs/bmc_api.yaml
+```
+
+程序会自动查找以下位置的 `.env` 文件：
+- 当前工作目录：`.env`
+- configs 目录：`configs/.env`
+- 可执行文件同级目录：`./.env`
+- 可执行文件同级 configs 目录：`./configs/.env`
+- 可执行文件上级目录：`../.env`
+- 可执行文件上级 configs 目录：`../configs/.env`
+
+#### 手动设置（备选）
+
+如果不想使用 `.env` 文件，也可以手动设置环境变量：
+
 ```bash
 # 方法1：使用 source 命令
 source configs/.env
@@ -138,7 +158,8 @@ export APIKEYAUTH_API_KEY="your_actual_bmc_api_key_here"
 
 **重要说明**：
 - `.env` 文件包含敏感信息，不会被提交到版本控制中
-- 请确保在生产环境中正确设置环境变量
+- 程序启动时会显示是否找到并加载了 `.env` 文件
+- 如果找到多个 `.env` 文件，会使用第一个找到的文件
 - 测试时可以使用提供的示例 API Key：`ded45a001ffb9c47b1e29fcbdd6bcec6`
 
 ## 主要改进

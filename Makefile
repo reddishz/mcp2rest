@@ -35,15 +35,13 @@ clean:
 # 测试 stdio 版本
 test-stdio: build-stdio
 	@echo "测试 MCP2REST-STDIO..."
-	@export APIKEYAUTH_API_KEY="ded45a001ffb9c47b1e29fcbdd6bcec6" && \
-	echo '{"jsonrpc":"2.0","id":"test","method":"initialize","params":{"protocolVersion":"20241105","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | \
+	@echo '{"jsonrpc":"2.0","id":"test","method":"initialize","params":{"protocolVersion":"20241105","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | \
 	./bin/mcp2rest-stdio -config ./configs/bmc_api.yaml
 
 # 测试 SSE 版本
 test-sse: build-sse
 	@echo "测试 MCP2REST-SSE..."
-	@export APIKEYAUTH_API_KEY="ded45a001ffb9c47b1e29fcbdd6bcec6" && \
-	./bin/mcp2rest-sse -config ./configs/bmc_api.yaml &
+	@./bin/mcp2rest-sse -config ./configs/bmc_api.yaml &
 	@sleep 3 && \
 	curl -X POST http://localhost:8088/ \
 		-H "Content-Type: application/json" \

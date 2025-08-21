@@ -15,6 +15,11 @@ import (
 )
 
 func main() {
+	// 自动加载 .env 文件
+	if err := config.LoadEnvFileWithLog(""); err != nil {
+		log.Printf("加载环境变量文件失败: %v", err)
+	}
+
 	// 初始化日志
 	if err := logging.InitLogger(); err != nil {
 		log.Fatalf("初始化日志失败: %v", err)
