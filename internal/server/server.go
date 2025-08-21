@@ -648,8 +648,15 @@ func (s *Server) handleToolCall(request mcp.MCPRequest) ([]byte, error) {
 		return json.Marshal(errResp)
 	}
 	
+	// 处理工具名称前缀
+	originalName := toolParams.Name
+	if strings.HasPrefix(toolParams.Name, "mcp_") {
+		toolParams.Name = strings.TrimPrefix(toolParams.Name, "mcp_")
+		logging.Logger.Printf("检测到 mcp_ 前缀，将工具名称从 %s 改为 %s", originalName, toolParams.Name)
+	}
+	
 	// 记录工具调用信息
-	logging.Logger.Printf("工具调用: %s, 参数: %+v", toolParams.Name, toolParams.Parameters)
+	logging.Logger.Printf("工具调用: %s (原始名称: %s), 参数: %+v", toolParams.Name, originalName, toolParams.Parameters)
 	
 	// 处理请求
 	result, err := s.handler.HandleRequest(toolParams)

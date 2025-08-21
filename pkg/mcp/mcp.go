@@ -31,6 +31,7 @@ type MCPError struct {
 type ToolCallParams struct {
 	Name       string                 `json:"name"`
 	Parameters map[string]interface{} `json:"parameters"`
+	Arguments  map[string]interface{} `json:"arguments"`
 }
 
 // ToolCallResult 表示工具调用结果
@@ -133,5 +134,16 @@ func ParseToolCallParams(params json.RawMessage) (*ToolCallParams, error) {
 	if err := json.Unmarshal(params, &toolParams); err != nil {
 		return nil, fmt.Errorf("解析工具调用参数失败: %w", err)
 	}
+	
+	// 如果 arguments 字段存在，将其合并到 parameters 中
+	if toolParams.Arguments != nil && len(toolParams.Arguments) > 0 {
+		if toolParams.Parameters == nil {
+			toolParams.Parameters = make(map[string]interface{})
+		}
+		for key, value := range toolParams.Arguments {
+			toolParams.Parameters[key] = value
+		}
+	}
+	
 	return &toolParams, nil
 }
