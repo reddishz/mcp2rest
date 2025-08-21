@@ -172,60 +172,7 @@ func GetDefaultServerConfig() (*ServerConfig, *GlobalConfig) {
 	return server, global
 }
 
-// TryLoadServerConfig 尝试从configs/server.yaml加载服务器配置，如果不存在则使用默认配置
-func TryLoadServerConfig() (*ServerConfig, *GlobalConfig, error) {
-	exePath, err := os.Executable()
-	if err != nil {
-		return nil, nil, fmt.Errorf("无法获取可执行文件路径: %v", err)
-	}
-	exeDir := filepath.Dir(exePath)
-	serverConfigPath := resolveConfigPath(exeDir, "configs/server.yaml")
-	
-	// 检查文件是否存在
-	if _, err := os.Stat(serverConfigPath); os.IsNotExist(err) {
-		// 文件不存在，尝试从工作目录加载
-		cwd, err := os.Getwd()
-		if err != nil {
-			return nil, nil, fmt.Errorf("获取当前工作目录失败: %v", err)
-		}
-		serverConfigPath = filepath.Join(cwd, "configs/server.yaml")
-		if _, err := os.Stat(serverConfigPath); os.IsNotExist(err) {
-			// 文件仍不存在，返回默认配置
-			server, global := GetDefaultServerConfig()
-			return server, global, nil
-		}
-	}
-	
-	// 文件存在，尝试加载
-	data, err := ioutil.ReadFile(serverConfigPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("读取服务器配置文件失败: %w", err)
-	}
 
-	var cfg struct {
-		Server ServerConfig `yaml:"server"`
-		Global GlobalConfig `yaml:"global"`
-	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, nil, fmt.Errorf("解析服务器配置文件失败: %w", err)
-	}
-
-	// 设置默认值（如果配置文件中未指定）
-	if cfg.Server.Port == 0 {
-		cfg.Server.Port = 8080
-	}
-	if cfg.Server.Host == "" {
-		cfg.Server.Host = "0.0.0.0"
-	}
-	if cfg.Server.Mode == "" {
-		cfg.Server.Mode = "sse"
-	}
-	if cfg.Global.Timeout == 0 {
-		cfg.Global.Timeout = 30 * time.Second
-	}
-
-	return &cfg.Server, &cfg.Global, nil
-}
 
 // LoadServerConfig 从服务器配置文件加载配置
 func LoadServerConfig(filePath string) (*ServerConfig, *GlobalConfig, error) {
