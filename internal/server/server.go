@@ -28,6 +28,19 @@ type Server struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	done        chan struct{}
+	// SSE 连接管理
+	sseConnections map[string]*SSEConnection
+	sseMutex       sync.RWMutex
+}
+
+// SSEConnection SSE连接
+type SSEConnection struct {
+	ID       string
+	Writer   http.ResponseWriter
+	Flusher  http.Flusher
+	Context  context.Context
+	Cancel   context.CancelFunc
+	RemoteAddr string
 }
 
 // NewServer 创建新的服务器实例
@@ -48,6 +61,7 @@ func NewServer(cfg *config.Config, spec *config.OpenAPISpec) (*Server, error) {
 		ctx:         ctx,
 		cancel:      cancel,
 		done:        make(chan struct{}),
+		sseConnections: make(map[string]*SSEConnection),
 	}, nil
 }
 
@@ -209,27 +223,87 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 处理GET请求（建立SSE连接）
+	// 处理GET请求（建立SSE长连接）
 	if r.Method == "GET" {
+		// 创建客户端连接标识
+		clientID := fmt.Sprintf("%s-%d", r.RemoteAddr, time.Now().UnixNano())
+		
+		// 创建连接上下文
+		connCtx, connCancel := context.WithCancel(r.Context())
+		
+		// 创建SSE连接
+		conn := &SSEConnection{
+			ID:         clientID,
+			Writer:     w,
+			Flusher:    flusher,
+			Context:    connCtx,
+			Cancel:     connCancel,
+			RemoteAddr: r.RemoteAddr,
+		}
+
+		// 注册连接
+		s.sseMutex.Lock()
+		s.sseConnections[clientID] = conn
+		s.sseMutex.Unlock()
+
+		logging.Logger.Printf("SSE客户端连接: %s", clientID)
+
 		// 发送连接建立消息
-		fmt.Fprintf(w, "data: {\"type\":\"connected\",\"message\":\"SSE连接已建立\"}\n\n")
+		fmt.Fprintf(w, "data: {\"type\":\"connected\",\"message\":\"SSE连接已建立\",\"clientId\":\"%s\"}\n\n", clientID)
 		flusher.Flush()
 
 		// 保持连接活跃
 		for {
 			select {
 			case <-s.ctx.Done():
-				logging.Logger.Printf("SSE连接关闭: %s", r.RemoteAddr)
+				logging.Logger.Printf("服务器关闭，SSE连接关闭: %s", clientID)
+				s.removeSSEConnection(clientID)
+				return
+			case <-connCtx.Done():
+				logging.Logger.Printf("客户端断开连接: %s", clientID)
+				s.removeSSEConnection(clientID)
 				return
 			case <-time.After(30 * time.Second):
-				// 发送心跳
-				fmt.Fprintf(w, "data: {\"type\":\"heartbeat\",\"timestamp\":\"%s\"}\n\n", time.Now().Format(time.RFC3339))
+				// 每30秒发送一次心跳，保持连接活跃
+				fmt.Fprintf(w, "data: {\"type\":\"heartbeat\",\"timestamp\":\"%s\",\"clientId\":\"%s\"}\n\n", 
+					time.Now().Format(time.RFC3339), clientID)
 				flusher.Flush()
 			}
 		}
 	}
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+// removeSSEConnection 移除SSE连接
+func (s *Server) removeSSEConnection(clientID string) {
+	s.sseMutex.Lock()
+	defer s.sseMutex.Unlock()
+	
+	if conn, exists := s.sseConnections[clientID]; exists {
+		conn.Cancel()
+		delete(s.sseConnections, clientID)
+		logging.Logger.Printf("SSE连接已移除: %s", clientID)
+	}
+}
+
+// broadcastToSSE 向所有SSE连接广播消息
+func (s *Server) broadcastToSSE(message []byte) {
+	s.sseMutex.RLock()
+	defer s.sseMutex.RUnlock()
+
+	for clientID, conn := range s.sseConnections {
+		select {
+		case <-conn.Context.Done():
+			// 连接已关闭，跳过
+			continue
+		default:
+			// 发送消息
+			fmt.Fprintf(conn.Writer, "data: %s\n\n", string(message))
+			conn.Flusher.Flush()
+			logging.Logger.Printf("向SSE客户端 %s 发送消息", clientID)
+		}
+	}
 }
 
 // startStdioServer 启动标准输入/输出服务器
