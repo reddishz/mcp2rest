@@ -244,3 +244,118 @@ func (h *RequestHandler) applyAuthentication(req *http.Request, operation *confi
 
 	return nil
 }
+
+// GetAvailableTools 获取可用的工具列表
+func (h *RequestHandler) GetAvailableTools() []map[string]interface{} {
+	var tools []map[string]interface{}
+	
+	// 遍历 OpenAPI 规范中的所有操作
+	for path, pathItem := range h.openAPISpec.Paths {
+		for method, operation := range pathItem {
+			if !isHTTPMethod(method) {
+				continue
+			}
+			
+			// 生成操作 ID
+			operationID := generateOperationID(method, path)
+			
+			// 构建工具信息
+			tool := map[string]interface{}{
+				"name": operationID,
+				"description": operation.Description,
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{},
+					"required": []string{}, // 确保始终是空数组而不是 null
+				},
+			}
+			
+			// 添加参数信息
+			if len(operation.Parameters) > 0 {
+				properties := make(map[string]interface{})
+				var required []string
+				
+				for _, param := range operation.Parameters {
+					properties[param.Name] = map[string]interface{}{
+						"type":        getSchemaType(param.Schema),
+						"description": param.Description,
+					}
+					
+					if param.Required {
+						required = append(required, param.Name)
+					}
+				}
+				
+				tool["inputSchema"].(map[string]interface{})["properties"] = properties
+				// 确保 required 始终是数组，即使为空
+				if len(required) > 0 {
+					tool["inputSchema"].(map[string]interface{})["required"] = required
+				} else {
+					tool["inputSchema"].(map[string]interface{})["required"] = []string{}
+				}
+			}
+			
+			tools = append(tools, tool)
+		}
+	}
+	
+	return tools
+}
+
+// isHTTPMethod 检查字符串是否为HTTP方法
+func isHTTPMethod(method string) bool {
+	method = strings.ToUpper(method)
+	return method == "GET" || method == "POST" || method == "PUT" || method == "DELETE" ||
+		method == "PATCH" || method == "HEAD" || method == "OPTIONS" || method == "TRACE"
+}
+
+// generateOperationID 根据HTTP方法和路径生成操作ID
+func generateOperationID(method, path string) string {
+	// 移除路径开头的斜杠
+	path = strings.TrimPrefix(path, "/")
+	
+	// 将路径转换为驼峰命名
+	parts := strings.Split(path, "/")
+	var result []string
+	
+	for _, part := range parts {
+		// 移除路径参数
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			continue
+		}
+		
+		// 转换为驼峰命名
+		if len(part) > 0 {
+			result = append(result, strings.Title(part))
+		}
+	}
+	
+	// 组合方法名和路径
+	operationID := strings.ToLower(method) + strings.Join(result, "")
+	
+	return operationID
+}
+
+// getSchemaType 获取模式类型
+func getSchemaType(schema config.Schema) string {
+	if schema.Type != "" {
+		return schema.Type
+	}
+	
+	// 根据其他属性推断类型
+	if schema.Format != "" {
+		switch schema.Format {
+		case "date-time":
+			return "string"
+		case "date":
+			return "string"
+		case "email":
+			return "string"
+		case "uri":
+			return "string"
+		}
+	}
+	
+	// 默认类型
+	return "string"
+}

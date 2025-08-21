@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -64,9 +63,9 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
-	fmt.Println("正在关闭服务器...")
+	logging.Logger.Println("正在关闭服务器...")
 	if err := srv.Stop(); err != nil {
 		log.Fatalf("服务器关闭失败: %v", err)
 	}
-	fmt.Println("服务器已关闭")
+	logging.Logger.Println("服务器已关闭")
 }

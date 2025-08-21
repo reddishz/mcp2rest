@@ -346,6 +346,10 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 		return s.handleInitialize(request)
 	case "notifications/initialized":
 		return s.handleInitialized(request)
+	case "notifications/cancelled":
+		return s.handleCancelled(request)
+	case "tools/list":
+		return s.handleToolsList(request)
 	case "toolCall":
 		return s.handleToolCall(request)
 	default:
@@ -431,6 +435,52 @@ func (s *Server) handleInitialized(request mcp.MCPRequest) ([]byte, error) {
 	
 	// 对于通知类型的请求，不需要返回响应
 	return nil, nil
+}
+
+// handleCancelled 处理取消通知
+func (s *Server) handleCancelled(request mcp.MCPRequest) ([]byte, error) {
+	logging.Logger.Printf("处理取消通知")
+	
+	// 对于通知类型的请求，不需要返回响应
+	return nil, nil
+}
+
+// handleToolsList 处理工具列表请求
+func (s *Server) handleToolsList(request mcp.MCPRequest) ([]byte, error) {
+	logging.Logger.Printf("处理工具列表请求")
+	
+	// 获取所有可用的工具名称
+	tools := s.handler.GetAvailableTools()
+	
+	// 打印工具详情
+	logging.Logger.Printf("发现 %d 个可用工具:", len(tools))
+	for i, tool := range tools {
+		name := tool["name"].(string)
+		description := tool["description"].(string)
+		logging.Logger.Printf("  %d. %s: %s", i+1, name, description)
+	}
+	
+	// 构建工具列表响应
+	toolsListResult := map[string]interface{}{
+		"tools": tools,
+	}
+	
+	response, err := mcp.NewSuccessResponse(request.GetIDString(), toolsListResult)
+	if err != nil {
+		logging.Logger.Printf("创建工具列表响应失败: %v", err)
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, "创建响应失败")
+		return json.Marshal(errResp)
+	}
+	
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		logging.Logger.Printf("序列化工具列表响应失败: %v", err)
+		errResp := mcp.NewErrorResponse(request.GetIDString(), -32603, "序列化响应失败")
+		return json.Marshal(errResp)
+	}
+	
+	logging.Logger.Printf("工具列表响应发送成功，包含 %d 个工具", len(tools))
+	return responseBytes, nil
 }
 
 // handleToolCall 处理工具调用请求
