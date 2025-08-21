@@ -105,10 +105,20 @@ func (s *Server) StopWithContext(ctx context.Context) error {
 	logging.Logger.Println("正在停止服务器...")
 	s.cancel()
 	
+	// 等待 done 通道或上下文超时
 	select {
 	case <-s.done:
+		logging.Logger.Println("服务器正常停止")
 		return nil
 	case <-ctx.Done():
+		logging.Logger.Printf("服务器停止超时: %v", ctx.Err())
+		// 强制关闭 done 通道，防止重复关闭
+		select {
+		case <-s.done:
+			// 通道已经关闭
+		default:
+			close(s.done)
+		}
 		return ctx.Err()
 	}
 }
@@ -116,6 +126,11 @@ func (s *Server) StopWithContext(ctx context.Context) error {
 // Done 返回完成通道
 func (s *Server) Done() <-chan struct{} {
 	return s.done
+}
+
+// Cancel 取消服务器上下文
+func (s *Server) Cancel() {
+	s.cancel()
 }
 
 // startWebSocketServer 启动WebSocket服务器
@@ -270,9 +285,17 @@ func (s *Server) startStdioServer() error {
 		}
 	}()
 	
-	// 等待上下文取消
-	<-s.ctx.Done()
-	logging.Logger.Println("标准输入/输出服务器收到停止信号")
+	// 等待上下文取消或信号
+	select {
+	case <-s.ctx.Done():
+		logging.Logger.Println("标准输入/输出服务器收到停止信号")
+	case <-time.After(1 * time.Second):
+		// 定期检查上下文是否已取消
+		if s.ctx.Err() != nil {
+			logging.Logger.Println("标准输入/输出服务器收到停止信号")
+			break
+		}
+	}
 	
 	// 等待所有协程退出
 	logging.Logger.Println("等待所有协程退出...")

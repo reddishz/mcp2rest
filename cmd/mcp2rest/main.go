@@ -71,6 +71,8 @@ func main() {
 	select {
 	case sig := <-sigCh:
 		logging.Logger.Printf("收到信号: %v", sig)
+		// 立即取消上下文
+		srv.Cancel()
 	case <-srv.Done():
 		logging.Logger.Printf("服务器已停止")
 	}
@@ -82,6 +84,8 @@ func main() {
 	
 	if err := srv.StopWithContext(ctx); err != nil {
 		logging.Logger.Printf("服务器关闭失败: %v", err)
+		// 强制退出进程，防止进程泄漏
+		logging.Logger.Println("强制退出进程")
 		os.Exit(1)
 	}
 	
