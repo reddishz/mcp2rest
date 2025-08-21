@@ -19,9 +19,10 @@ import (
 	"context"
 )
 
-// Server 表示MCP2REST服务器
+// Server MCP服务器
 type Server struct {
 	config      *config.Config
+	openAPISpec *config.OpenAPISpec
 	handler     *handler.RequestHandler
 	httpServer  *http.Server
 	connections map[*websocket.Conn]bool
@@ -29,20 +30,23 @@ type Server struct {
 	upgrader    websocket.Upgrader
 	ctx         context.Context
 	cancel      context.CancelFunc
+	done        chan struct{}
 }
 
 // NewServer 创建新的服务器实例
 func NewServer(cfg *config.Config, spec *config.OpenAPISpec) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	
+	// 创建请求处理器
 	reqHandler, err := handler.NewRequestHandler(cfg, spec)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("创建请求处理器失败: %w", err)
 	}
-
-	server := &Server{
+	
+	return &Server{
 		config:      cfg,
+		openAPISpec: spec,
 		handler:     reqHandler,
 		connections: make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{
@@ -52,9 +56,8 @@ func NewServer(cfg *config.Config, spec *config.OpenAPISpec) (*Server, error) {
 		},
 		ctx:    ctx,
 		cancel: cancel,
-	}
-
-	return server, nil
+		done:   make(chan struct{}),
+	}, nil
 }
 
 // Start 启动服务器
@@ -71,6 +74,7 @@ func (s *Server) Start() error {
 
 // Stop 停止服务器
 func (s *Server) Stop() error {
+	logging.Logger.Println("正在停止服务器...")
 	s.cancel()
 	
 	// 关闭所有WebSocket连接
@@ -85,7 +89,33 @@ func (s *Server) Stop() error {
 		return s.httpServer.Shutdown(context.Background())
 	}
 	
+	// 安全关闭 done 通道
+	select {
+	case <-s.done:
+		// 通道已经关闭
+	default:
+		close(s.done)
+	}
+	
 	return nil
+}
+
+// StopWithContext 使用上下文停止服务器
+func (s *Server) StopWithContext(ctx context.Context) error {
+	logging.Logger.Println("正在停止服务器...")
+	s.cancel()
+	
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Done 返回完成通道
+func (s *Server) Done() <-chan struct{} {
+	return s.done
 }
 
 // startWebSocketServer 启动WebSocket服务器
@@ -176,6 +206,8 @@ func (s *Server) startStdioServer() error {
 			if r := recover(); r != nil {
 				logging.Logger.Printf("标准输入/输出服务器发生panic: %v", r)
 			}
+			// 确保在读取协程退出时关闭服务器
+			s.cancel()
 		}()
 		
 		for {
@@ -188,7 +220,8 @@ func (s *Server) startStdioServer() error {
 				line, err := reader.ReadString('\n')
 				if err != nil {
 					if err == io.EOF {
-						logging.Logger.Println("标准输入已关闭")
+						logging.Logger.Println("标准输入已关闭，退出服务器")
+						s.cancel()
 						return
 					}
 					logging.Logger.Printf("从标准输入读取失败: %v", err)
@@ -205,7 +238,7 @@ func (s *Server) startStdioServer() error {
 				
 				// 创建请求任务
 				task := &requestTask{
-					data:   []byte(line),
+					data: []byte(line),
 				}
 				
 				// 发送到工作协程池
@@ -226,6 +259,15 @@ func (s *Server) startStdioServer() error {
 	// 等待上下文取消
 	<-s.ctx.Done()
 	logging.Logger.Println("标准输入/输出服务器已停止")
+	
+	// 安全关闭 done 通道
+	select {
+	case <-s.done:
+		// 通道已经关闭
+	default:
+		close(s.done)
+	}
+	
 	return nil
 }
 
@@ -362,6 +404,8 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 		return s.handleToolsList(request)
 	case "toolCall":
 		return s.handleToolCall(request)
+	case "exit":
+		return s.handleExit(request)
 	default:
 		logging.Logger.Printf("不支持的方法: %s", request.Method)
 		errResp := mcp.NewErrorResponse(request.GetIDString(), -32601, "不支持的方法")
@@ -453,6 +497,33 @@ func (s *Server) handleCancelled(request mcp.MCPRequest) ([]byte, error) {
 	
 	// 对于通知类型的请求，不需要返回响应
 	return nil, nil
+}
+
+// handleExit 处理退出请求
+func (s *Server) handleExit(request mcp.MCPRequest) ([]byte, error) {
+	logging.Logger.Printf("收到退出请求，准备关闭服务器")
+	
+	// 发送退出响应
+	response, err := mcp.NewSuccessResponse(request.GetIDString(), nil)
+	if err != nil {
+		logging.Logger.Printf("创建退出响应失败: %v", err)
+		return nil, err
+	}
+	
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		logging.Logger.Printf("序列化退出响应失败: %v", err)
+		return nil, err
+	}
+	
+	// 异步关闭服务器
+	go func() {
+		time.Sleep(100 * time.Millisecond) // 给响应发送一点时间
+		logging.Logger.Printf("执行退出操作")
+		s.Stop()
+	}()
+	
+	return responseBytes, nil
 }
 
 // handleToolsList 处理工具列表请求

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mcp2rest/internal/config"
 	"github.com/mcp2rest/internal/logging"
@@ -21,6 +23,8 @@ func main() {
 
 	// 记录启动信息
 	logging.Logger.Println("===== 启动 MCP2REST 服务器 =====")
+	logging.Logger.Printf("进程ID: %d", os.Getpid())
+	logging.Logger.Printf("父进程ID: %d", os.Getppid())
 	logging.Logger.Printf("当前工作目录: %s", os.Getenv("PWD"))
 	logging.Logger.Printf("环境变量 PATH: %s", os.Getenv("PATH"))
 	logging.Logger.Printf("环境变量 GOPATH: %s", os.Getenv("GOPATH"))
@@ -52,20 +56,37 @@ func main() {
 	// 启动服务器
 	go func() {
 		if err := srv.Start(); err != nil {
-			log.Fatalf("服务器启动失败: %v", err)
+			logging.Logger.Printf("服务器启动失败: %v", err)
+			os.Exit(1)
 		}
 	}()
 
 	logging.Logger.Printf("MCP2REST 服务器已启动，模式: %s", cfg.Server.Mode)
 
-	// 等待中断信号
+	// 设置信号处理
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-
-	logging.Logger.Println("正在关闭服务器...")
-	if err := srv.Stop(); err != nil {
-		log.Fatalf("服务器关闭失败: %v", err)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+	
+	// 等待信号或服务器停止
+	select {
+	case sig := <-sigCh:
+		logging.Logger.Printf("收到信号: %v", sig)
+	case <-srv.Done():
+		logging.Logger.Printf("服务器已停止")
 	}
+	
+	// 优雅关闭
+	logging.Logger.Println("正在关闭服务器...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	if err := srv.StopWithContext(ctx); err != nil {
+		logging.Logger.Printf("服务器关闭失败: %v", err)
+		os.Exit(1)
+	}
+	
 	logging.Logger.Println("服务器已关闭")
+	
+	// 确保进程退出
+	os.Exit(0)
 }
