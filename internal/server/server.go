@@ -354,7 +354,7 @@ func (s *Server) stdioWorker(requestChan <-chan *requestTask) {
 func (s *Server) processRequest(task *requestTask) {
 	// 设置请求超时
 	logging.Logger.Printf("处理请求，超时配置: %v", s.config.Global.Timeout)
-	ctx, cancel := context.WithTimeout(s.ctx, s.config.Global.Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.config.Global.Timeout)
 	defer cancel()
 	
 	// 使用通道进行超时控制，减少协程使用
@@ -478,8 +478,8 @@ func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
 		return s.handleCancelled(request)
 	case "tools/list":
 		return s.handleToolsList(request)
-	case "toolCall":
-		return s.handleToolCall(request)
+			case "toolCall", "tools/call":
+			return s.handleToolCall(request)
 	case "exit":
 		return s.handleExit(request)
 	default:
