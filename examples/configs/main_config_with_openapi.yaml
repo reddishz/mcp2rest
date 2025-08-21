@@ -1,7 +1,0 @@
-# 主配置文件示例，包含OpenAPI规范
-server_config: "configs/server_config.yaml"
-api_configs:
-  - "configs/weather_api.yaml"
-  - "configs/news_api.yaml"
-openapi_specs:
-  - "examples/openapi/weather_api.json"

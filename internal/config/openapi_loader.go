@@ -8,9 +8,9 @@ import (
 	"os"
 )
 
-// OpenAPILoader 接口定义了从OpenAPI规范加载端点配置的方法
+// OpenAPILoader 接口定义了从OpenAPI规范加载配置的方法
 type OpenAPILoader interface {
-	LoadFromOpenAPI(filePath string) ([]EndpointConfig, error)
+	LoadFromOpenAPI(filePath string) (*OpenAPISpec, error)
 }
 
 var openAPILoaderInstance OpenAPILoader
@@ -20,8 +20,8 @@ func RegisterOpenAPILoader(loader OpenAPILoader) {
 	openAPILoaderInstance = loader
 }
 
-// LoadOpenAPISpec 从OpenAPI规范文件加载端点配置
-func LoadOpenAPISpec(filePath string) ([]EndpointConfig, error) {
+// LoadOpenAPISpec 从OpenAPI规范文件加载配置
+func LoadOpenAPISpec(filePath string) (*OpenAPISpec, error) {
 	if openAPILoaderInstance == nil {
 		return nil, fmt.Errorf("OpenAPI加载器未注册")
 	}
@@ -35,8 +35,8 @@ func LoadOpenAPISpec(filePath string) ([]EndpointConfig, error) {
 	return openAPILoaderInstance.LoadFromOpenAPI(filePath)
 }
 
-// LoadConfigWithOpenAPI 加载服务器配置和API配置
-func LoadConfigWithOpenAPI(apiConfigPath string) (*Config, error) {
+// LoadConfigWithOpenAPI 加载服务器配置和OpenAPI规范
+func LoadConfigWithOpenAPI(openAPIPath string) (*Config, *OpenAPISpec, error) {
 	// 1. 加载服务器配置
 	// 获取可执行文件路径
 	exePath, err := os.Executable()
@@ -60,12 +60,12 @@ func LoadConfigWithOpenAPI(apiConfigPath string) (*Config, error) {
 		)
 	}
 	
-	// 如果API配置文件路径是绝对路径，也尝试基于其目录的路径
-	if filepath.IsAbs(apiConfigPath) {
-		apiConfigDir := filepath.Dir(apiConfigPath)
+	// 如果OpenAPI文件路径是绝对路径，也尝试基于其目录的路径
+	if filepath.IsAbs(openAPIPath) {
+		openAPIDir := filepath.Dir(openAPIPath)
 		serverConfigPaths = append(serverConfigPaths,
-			filepath.Join(apiConfigDir, "server.yaml"),             // API配置文件同级目录
-			filepath.Join(filepath.Dir(apiConfigDir), "server.yaml"), // API配置文件上级目录
+			filepath.Join(openAPIDir, "server.yaml"),             // OpenAPI文件同级目录
+			filepath.Join(filepath.Dir(openAPIDir), "server.yaml"), // OpenAPI文件上级目录
 		)
 	}
 	
@@ -92,33 +92,19 @@ func LoadConfigWithOpenAPI(apiConfigPath string) (*Config, error) {
 
 	// 创建基础配置
 	cfg := &Config{
-		Server:    *server,
-		Global:    *global,
-		Endpoints: []EndpointConfig{},
+		Server: *server,
+		Global: *global,
 	}
 
-	// 2. 加载API配置
-	logging.Logger.Printf("开始加载API配置: %s", apiConfigPath)
-	if IsOpenAPISpec(apiConfigPath) {
-		// 如果是OpenAPI规范文件
-		logging.Logger.Printf("检测到OpenAPI规范文件: %s", apiConfigPath)
-		if openAPILoaderInstance != nil {
-			endpoints, err := LoadOpenAPISpec(apiConfigPath)
-			if err != nil {
-				return nil, fmt.Errorf("加载OpenAPI规范 %s 失败: %w", apiConfigPath, err)
-			}
-			cfg.Endpoints = append(cfg.Endpoints, endpoints...)
-			logging.Logger.Printf("成功加载 %d 个端点配置", len(endpoints))
-		}
-	} else {
-		// 作为普通API配置文件加载
-		endpoints, err := LoadAPIConfig(apiConfigPath)
-		if err != nil {
-			return nil, fmt.Errorf("加载API配置文件 %s 失败: %w", apiConfigPath, err)
-		}
-		cfg.Endpoints = append(cfg.Endpoints, endpoints...)
-		logging.Logger.Printf("成功加载 %d 个端点配置", len(endpoints))
+	// 2. 加载OpenAPI规范
+	logging.Logger.Printf("开始加载OpenAPI规范: %s", openAPIPath)
+	
+	openAPISpec, err := LoadOpenAPISpec(openAPIPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("加载OpenAPI规范 %s 失败: %w", openAPIPath, err)
 	}
+	
+	logging.Logger.Printf("成功加载OpenAPI规范: %s", openAPIPath)
 
-	return cfg, nil
+	return cfg, openAPISpec, nil
 }

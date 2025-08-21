@@ -27,25 +27,25 @@ func main() {
 	logging.Logger.Printf("环境变量 GOPATH: %s", os.Getenv("GOPATH"))
 
 	// 命令行参数
-	apiConfigFile := flag.String("config", "configs/api_config.yaml", "API配置文件路径")
+	openAPIPath := flag.String("config", "configs/bmc_api.yaml", "OpenAPI规范文件路径")
 	flag.Parse()
-	logging.Logger.Printf("命令行参数: config=%s", *apiConfigFile)
-	flag.Parse()
+	logging.Logger.Printf("命令行参数: config=%s", *openAPIPath)
 
 	// 注册OpenAPI加载器
-	openapi.RegisterLoader()
+	loader := openapi.NewLoader()
+	config.RegisterOpenAPILoader(loader)
 
 	// 加载配置
-	logging.Logger.Printf("开始加载配置文件: %s", *apiConfigFile)
-	cfg, err := config.LoadConfigWithOpenAPI(*apiConfigFile)
+	logging.Logger.Printf("开始加载OpenAPI规范: %s", *openAPIPath)
+	cfg, spec, err := config.LoadConfigWithOpenAPI(*openAPIPath)
 	if err != nil {
 		logging.Logger.Fatalf("加载配置失败: %v", err)
 	}
-	logging.Logger.Printf("配置文件加载成功: 模式=%s, 主机=%s, 端口=%d", cfg.Server.Mode, cfg.Server.Host, cfg.Server.Port)
-	logging.Logger.Printf("完整配置内容:\n%+v", cfg)
+	logging.Logger.Printf("配置加载成功: 模式=%s, 主机=%s, 端口=%d", cfg.Server.Mode, cfg.Server.Host, cfg.Server.Port)
+	logging.Logger.Printf("OpenAPI规范: %s v%s", spec.Info.Title, spec.Info.Version)
 
 	// 创建服务器
-	srv, err := server.NewServer(cfg)
+	srv, err := server.NewServer(cfg, spec)
 	if err != nil {
 		log.Fatalf("创建服务器失败: %v", err)
 	}

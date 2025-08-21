@@ -1,11 +1,9 @@
 package config
 
 import (
-	"github.com/mcp2rest/internal/logging"
-	
-	"os"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,18 +11,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// MainConfig 表示主配置文件
-type MainConfig struct {
-	ServerConfig string   `yaml:"server_config"` // 服务器配置文件路径
-	APIConfigs   []string `yaml:"api_configs"`   // API配置文件路径列表
-	OpenAPISpecs []string `yaml:"openapi_specs"` // OpenAPI规范文件路径列表
-}
-
 // Config 表示整个配置文件
 type Config struct {
-	Server    ServerConfig     `yaml:"server"`
-	Global    GlobalConfig     `yaml:"global"`
-	Endpoints []EndpointConfig `yaml:"endpoints"`
+	Server ServerConfig `yaml:"server"`
+	Global GlobalConfig `yaml:"global"`
 }
 
 // ServerConfig 表示服务器配置
@@ -41,15 +31,94 @@ type GlobalConfig struct {
 	DefaultHeaders map[string]string `yaml:"default_headers"`
 }
 
-// EndpointConfig 表示API端点配置
-type EndpointConfig struct {
-	Name           string            `yaml:"name"`
-	Description    string            `yaml:"description"`
-	Method         string            `yaml:"method"`
-	URLTemplate    string            `yaml:"url_template"`
-	Authentication AuthConfig        `yaml:"authentication"`
-	Parameters     []ParameterConfig `yaml:"parameters"`
-	Response       ResponseConfig    `yaml:"response"`
+// OpenAPISpec 表示 OpenAPI 规范
+type OpenAPISpec struct {
+	OpenAPI    string                 `json:"openapi" yaml:"openapi"`
+	Info       OpenAPIInfo            `json:"info" yaml:"info"`
+	Servers    []OpenAPIServer        `json:"servers" yaml:"servers"`
+	Paths      map[string]PathItem    `json:"paths" yaml:"paths"`
+	Components OpenAPIComponents      `json:"components" yaml:"components"`
+	Security   []map[string][]string  `json:"security" yaml:"security"`
+}
+
+// OpenAPIInfo 表示 OpenAPI 信息
+type OpenAPIInfo struct {
+	Title       string `json:"title" yaml:"title"`
+	Description string `json:"description" yaml:"description"`
+	Version     string `json:"version" yaml:"version"`
+}
+
+// OpenAPIServer 表示 OpenAPI 服务器
+type OpenAPIServer struct {
+	URL         string `json:"url" yaml:"url"`
+	Description string `json:"description" yaml:"description"`
+}
+
+// PathItem 表示路径项
+type PathItem map[string]Operation
+
+// Operation 表示操作
+type Operation struct {
+	Summary     string                 `json:"summary" yaml:"summary"`
+	Description string                 `json:"description" yaml:"description"`
+	OperationID string                 `json:"operationId" yaml:"operationId"`
+	Tags        []string               `json:"tags" yaml:"tags"`
+	Parameters  []Parameter            `json:"parameters" yaml:"parameters"`
+	RequestBody RequestBody            `json:"requestBody" yaml:"requestBody"`
+	Responses   map[string]Response    `json:"responses" yaml:"responses"`
+	Security    []map[string][]string  `json:"security" yaml:"security"`
+}
+
+// Parameter 表示参数
+type Parameter struct {
+	Name        string      `json:"name" yaml:"name"`
+	In          string      `json:"in" yaml:"in"`
+	Description string      `json:"description" yaml:"description"`
+	Required    bool        `json:"required" yaml:"required"`
+	Schema      Schema      `json:"schema" yaml:"schema"`
+	Example     interface{} `json:"example" yaml:"example"`
+}
+
+// RequestBody 表示请求体
+type RequestBody struct {
+	Description string               `json:"description" yaml:"description"`
+	Required    bool                 `json:"required" yaml:"required"`
+	Content     map[string]MediaType `json:"content" yaml:"content"`
+}
+
+// MediaType 表示媒体类型
+type MediaType struct {
+	Schema Schema `json:"schema" yaml:"schema"`
+}
+
+// Schema 表示模式
+type Schema struct {
+	Type       string                 `json:"type" yaml:"type"`
+	Format     string                 `json:"format" yaml:"format"`
+	Properties map[string]Schema      `json:"properties" yaml:"properties"`
+	Required   []string               `json:"required" yaml:"required"`
+	Items      *Schema                `json:"items" yaml:"items"`
+	Ref        string                 `json:"$ref" yaml:"$ref"`
+}
+
+// Response 表示响应
+type Response struct {
+	Description string               `json:"description" yaml:"description"`
+	Content     map[string]MediaType `json:"content" yaml:"content"`
+}
+
+// OpenAPIComponents 表示组件
+type OpenAPIComponents struct {
+	Schemas         map[string]Schema         `json:"schemas" yaml:"schemas"`
+	SecuritySchemes map[string]SecurityScheme `json:"securitySchemes" yaml:"securitySchemes"`
+}
+
+// SecurityScheme 表示安全方案
+type SecurityScheme struct {
+	Type   string `json:"type" yaml:"type"`
+	Scheme string `json:"scheme" yaml:"scheme"`
+	Name   string `json:"name" yaml:"name"`
+	In     string `json:"in" yaml:"in"`
 }
 
 // AuthConfig 表示身份验证配置
@@ -60,30 +129,6 @@ type AuthConfig struct {
 	KeyEnv     string `yaml:"key_env"`     // 环境变量名，用于获取API密钥
 	Username   string `yaml:"username"`    // 用于基本身份验证
 	Password   string `yaml:"password"`    // 用于基本身份验证
-}
-
-// ParameterConfig 表示参数配置
-type ParameterConfig struct {
-	Name        string      `yaml:"name"`
-	Required    bool        `yaml:"required"`
-	Default     interface{} `yaml:"default"`
-	Description string      `yaml:"description"`
-	In          string      `yaml:"in"` // "path", "query", "body", "header"
-	Sensitive   bool        `yaml:"sensitive"`
-}
-
-// ResponseConfig 表示响应处理配置
-type ResponseConfig struct {
-	SuccessCode int             `yaml:"success_code"`
-	ErrorCodes  map[int]string  `yaml:"error_codes"`
-	Transform   TransformConfig `yaml:"transform"`
-}
-
-// TransformConfig 表示响应转换配置
-type TransformConfig struct {
-	Type       string `yaml:"type"`       // "direct", "jq", "template", "custom"
-	Expression string `yaml:"expression"` // JQ表达式
-	Template   string `yaml:"template"`   // 模板字符串
 }
 
 // resolveConfigPath 解析配置文件路径，支持从可执行文件目录或上一级目录查找
@@ -135,12 +180,6 @@ func TryLoadServerConfig() (*ServerConfig, *GlobalConfig, error) {
 	}
 	exeDir := filepath.Dir(exePath)
 	serverConfigPath := resolveConfigPath(exeDir, "configs/server.yaml")
-
-	// 如果通过 -f 参数指定了配置文件路径，也应用相同的解析逻辑
-	var customConfigPath string
-	if customConfigPath != "" {
-		customConfigPath = resolveConfigPath(exeDir, customConfigPath)
-	}
 	
 	// 检查文件是否存在
 	if _, err := os.Stat(serverConfigPath); os.IsNotExist(err) {
@@ -188,56 +227,27 @@ func TryLoadServerConfig() (*ServerConfig, *GlobalConfig, error) {
 	return &cfg.Server, &cfg.Global, nil
 }
 
-// LoadMainConfig 从主配置文件加载配置
-func LoadMainConfig(filePath string) (*MainConfig, error) {
-	data, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("读取主配置文件失败: %w", err)
-	}
-
-	var mainCfg MainConfig
-	if err := yaml.Unmarshal(data, &mainCfg); err != nil {
-		return nil, fmt.Errorf("解析主配置文件失败: %w", err)
-	}
-
-	return &mainCfg, nil
-}
-
 // LoadServerConfig 从服务器配置文件加载配置
 func LoadServerConfig(filePath string) (*ServerConfig, *GlobalConfig, error) {
-	logging.Logger.Printf("开始加载服务器配置文件: %s", filePath)
 	if filePath == "" {
-		logging.Logger.Printf("服务器配置文件路径为空")
 		return nil, nil, fmt.Errorf("服务器配置文件路径为空")
 	}
 
 	// 记录文件路径的绝对路径
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		logging.Logger.Printf("获取文件绝对路径失败: %s, 错误: %v", filePath, err)
 		return nil, nil, fmt.Errorf("获取文件绝对路径失败: %w", err)
 	}
-	logging.Logger.Printf("服务器配置文件绝对路径: %s", absPath)
 
 	// 检查文件是否存在
 	if _, err := os.Stat(absPath); err != nil {
-		logging.Logger.Printf("服务器配置文件不存在: %s, 错误: %v", absPath, err)
 		return nil, nil, fmt.Errorf("服务器配置文件 %s 不存在: %w", absPath, err)
 	}
-	logging.Logger.Printf("服务器配置文件存在: %s", absPath)
-
-	// 记录文件读取开始时间
-	startTime := time.Now()
-	logging.Logger.Printf("开始读取服务器配置文件: %s", absPath)
 
 	data, err := ioutil.ReadFile(absPath)
 	if err != nil {
-		logging.Logger.Printf("读取服务器配置文件失败: %s, 错误: %v", absPath, err)
 		return nil, nil, fmt.Errorf("读取服务器配置文件失败: %w", err)
 	}
-
-	// 记录文件读取结束时间
-	logging.Logger.Printf("服务器配置文件读取完成: %s, 耗时: %v", absPath, time.Since(startTime))
 
 	var cfg struct {
 		Server ServerConfig `yaml:"server"`
@@ -264,100 +274,8 @@ func LoadServerConfig(filePath string) (*ServerConfig, *GlobalConfig, error) {
 	return &cfg.Server, &cfg.Global, nil
 }
 
-// LoadAPIConfig 从API配置文件加载端点配置
-func LoadAPIConfig(filePath string) ([]EndpointConfig, error) {
-	data, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("读取API配置文件失败: %w", err)
-	}
-
-	var cfg struct {
-		Endpoints []EndpointConfig `yaml:"endpoints"`
-	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("解析API配置文件失败: %w", err)
-	}
-
-	return cfg.Endpoints, nil
-}
-
-// LoadConfig 从主配置文件加载完整配置
-func LoadConfig(filePath string) (*Config, error) {
-	// 加载主配置
-	mainCfg, err := LoadMainConfig(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// 加载服务器配置
-	server, global, err := LoadServerConfig(mainCfg.ServerConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建完整配置
-	cfg := &Config{
-		Server:    *server,
-		Global:    *global,
-		Endpoints: []EndpointConfig{},
-	}
-
-	// 加载所有API配置
-	for _, apiConfigPath := range mainCfg.APIConfigs {
-		endpoints, err := LoadAPIConfig(apiConfigPath)
-		if err != nil {
-			return nil, fmt.Errorf("加载API配置文件 %s 失败: %w", apiConfigPath, err)
-		}
-		cfg.Endpoints = append(cfg.Endpoints, endpoints...)
-	}
-
-	// 加载所有OpenAPI规范
-	for _, openAPIPath := range mainCfg.OpenAPISpecs {
-		// 这里将在后面实现OpenAPI规范的加载
-		// 现在只是占位，实际实现将在openapi包中
-		fmt.Printf("将加载OpenAPI规范: %s\n", openAPIPath)
-	}
-
-	return cfg, nil
-}
-
-// GetEndpointByName 根据名称获取端点配置
-func (c *Config) GetEndpointByName(name string) (*EndpointConfig, error) {
-	for _, endpoint := range c.Endpoints {
-		if endpoint.Name == name {
-			return &endpoint, nil
-		}
-	}
-	return nil, fmt.Errorf("未找到名为 %s 的端点配置", name)
-}
-
 // IsOpenAPISpec 检查文件是否为OpenAPI规范
 func IsOpenAPISpec(filePath string) bool {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	return ext == ".json" || ext == ".yaml" || ext == ".yml"
-}
-
-// LoadConfigFromAPIFile 直接从API配置文件加载配置，使用默认服务器配置
-func LoadConfigFromAPIFile(apiConfigPath string) (*Config, error) {
-	// 尝试加载服务器配置，如果不存在则使用默认配置
-	server, global, err := TryLoadServerConfig()
-	if err != nil {
-		return nil, err
-	}
-	
-	// 创建完整配置
-	cfg := &Config{
-		Server:    *server,
-		Global:    *global,
-		Endpoints: []EndpointConfig{},
-	}
-	
-	// 加载API配置
-	endpoints, err := LoadAPIConfig(apiConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("加载API配置文件 %s 失败: %w", apiConfigPath, err)
-	}
-	cfg.Endpoints = append(cfg.Endpoints, endpoints...)
-	
-	return cfg, nil
 }

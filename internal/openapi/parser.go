@@ -11,104 +11,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// OpenAPISpec 表示OpenAPI规范
-type OpenAPISpec struct {
-	OpenAPI    string                 `json:"openapi" yaml:"openapi"`
-	Info       OpenAPIInfo            `json:"info" yaml:"info"`
-	Servers    []OpenAPIServer        `json:"servers" yaml:"servers"`
-	Paths      map[string]PathItem    `json:"paths" yaml:"paths"`
-	Components OpenAPIComponents      `json:"components" yaml:"components"`
-	Security   []map[string][]string  `json:"security" yaml:"security"`
+// Loader 实现 OpenAPI 加载器接口
+type Loader struct{}
+
+// NewLoader 创建新的 OpenAPI 加载器
+func NewLoader() *Loader {
+	return &Loader{}
 }
 
-// OpenAPIInfo 表示OpenAPI信息
-type OpenAPIInfo struct {
-	Title       string `json:"title" yaml:"title"`
-	Description string `json:"description" yaml:"description"`
-	Version     string `json:"version" yaml:"version"`
-}
-
-// OpenAPIServer 表示OpenAPI服务器
-type OpenAPIServer struct {
-	URL         string `json:"url" yaml:"url"`
-	Description string `json:"description" yaml:"description"`
-}
-
-// PathItem 表示路径项
-type PathItem map[string]Operation
-
-// Operation 表示操作
-type Operation struct {
-	Summary     string                 `json:"summary" yaml:"summary"`
-	Description string                 `json:"description" yaml:"description"`
-	OperationID string                 `json:"operationId" yaml:"operationId"`
-	Tags        []string               `json:"tags" yaml:"tags"`
-	Parameters  []Parameter            `json:"parameters" yaml:"parameters"`
-	RequestBody RequestBody            `json:"requestBody" yaml:"requestBody"`
-	Responses   map[string]Response    `json:"responses" yaml:"responses"`
-	Security    []map[string][]string  `json:"security" yaml:"security"`
-}
-
-// Parameter 表示参数
-type Parameter struct {
-	Name        string      `json:"name" yaml:"name"`
-	In          string      `json:"in" yaml:"in"`
-	Description string      `json:"description" yaml:"description"`
-	Required    bool        `json:"required" yaml:"required"`
-	Schema      Schema      `json:"schema" yaml:"schema"`
-	Example     interface{} `json:"example" yaml:"example"`
-}
-
-// RequestBody 表示请求体
-type RequestBody struct {
-	Description string               `json:"description" yaml:"description"`
-	Required    bool                 `json:"required" yaml:"required"`
-	Content     map[string]MediaType `json:"content" yaml:"content"`
-}
-
-// MediaType 表示媒体类型
-type MediaType struct {
-	Schema Schema `json:"schema" yaml:"schema"`
-}
-
-// Schema 表示模式
-type Schema struct {
-	Type       string                 `json:"type" yaml:"type"`
-	Format     string                 `json:"format" yaml:"format"`
-	Properties map[string]Schema      `json:"properties" yaml:"properties"`
-	Required   []string               `json:"required" yaml:"required"`
-	Items      *Schema                `json:"items" yaml:"items"`
-	Ref        string                 `json:"$ref" yaml:"$ref"`
-}
-
-// Response 表示响应
-type Response struct {
-	Description string               `json:"description" yaml:"description"`
-	Content     map[string]MediaType `json:"content" yaml:"content"`
-}
-
-// OpenAPIComponents 表示组件
-type OpenAPIComponents struct {
-	Schemas         map[string]Schema         `json:"schemas" yaml:"schemas"`
-	SecuritySchemes map[string]SecurityScheme `json:"securitySchemes" yaml:"securitySchemes"`
-}
-
-// SecurityScheme 表示安全方案
-type SecurityScheme struct {
-	Type   string `json:"type" yaml:"type"`
-	Scheme string `json:"scheme" yaml:"scheme"`
-	Name   string `json:"name" yaml:"name"`
-	In     string `json:"in" yaml:"in"`
+// LoadFromOpenAPI 从 OpenAPI 规范文件加载配置
+func (l *Loader) LoadFromOpenAPI(filePath string) (*config.OpenAPISpec, error) {
+	return ParseOpenAPISpec(filePath)
 }
 
 // ParseOpenAPISpec 解析OpenAPI规范文件
-func ParseOpenAPISpec(filePath string) (*OpenAPISpec, error) {
+func ParseOpenAPISpec(filePath string) (*config.OpenAPISpec, error) {
 	data, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("读取OpenAPI规范文件失败: %w", err)
 	}
 
-	var spec OpenAPISpec
+	var spec config.OpenAPISpec
 	ext := strings.ToLower(filepath.Ext(filePath))
 	if ext == ".json" {
 		if err := json.Unmarshal(data, &spec); err != nil {
@@ -125,140 +48,92 @@ func ParseOpenAPISpec(filePath string) (*OpenAPISpec, error) {
 	return &spec, nil
 }
 
-// ConvertToEndpoints 将OpenAPI规范转换为端点配置
-func ConvertToEndpoints(spec *OpenAPISpec) []config.EndpointConfig {
-	var endpoints []config.EndpointConfig
-
-	// 获取基础URL
-	baseURL := ""
-	if len(spec.Servers) > 0 {
-		baseURL = spec.Servers[0].URL
-	}
-
-	// 处理安全方案
-	securitySchemes := make(map[string]SecurityScheme)
-	if spec.Components.SecuritySchemes != nil {
-		securitySchemes = spec.Components.SecuritySchemes
-	}
-
-	// 处理路径
+// GetOperationByID 根据操作ID获取操作
+func GetOperationByID(spec *config.OpenAPISpec, operationID string) (*config.Operation, string, string, error) {
 	for path, pathItem := range spec.Paths {
 		for method, operation := range pathItem {
-			// 跳过非HTTP方法的字段
 			if !isHTTPMethod(method) {
 				continue
 			}
-
-			// 创建端点配置
-			endpoint := config.EndpointConfig{
-				Name:        operation.OperationID,
-				Description: operation.Description,
-				Method:      strings.ToUpper(method),
-				URLTemplate: baseURL + path,
+			
+			// 如果操作有明确的 operationId，直接匹配
+			if operation.OperationID == operationID {
+				return &operation, strings.ToUpper(method), path, nil
 			}
-
-			// 处理参数
-			var parameters []config.ParameterConfig
-			for _, param := range operation.Parameters {
-				parameter := config.ParameterConfig{
-					Name:        param.Name,
-					Required:    param.Required,
-					Description: param.Description,
-					In:          param.In,
-				}
-				parameters = append(parameters, parameter)
+			
+			// 如果没有 operationId，根据路径和方法生成操作ID进行匹配
+			generatedID := generateOperationID(method, path)
+			if generatedID == operationID {
+				return &operation, strings.ToUpper(method), path, nil
 			}
-
-			// 处理请求体参数
-			if operation.RequestBody.Content != nil {
-				for _, mediaType := range operation.RequestBody.Content {
-					if mediaType.Schema.Properties != nil {
-						for name := range mediaType.Schema.Properties {
-							required := false
-							for _, req := range mediaType.Schema.Required {
-								if req == name {
-									required = true
-									break
-								}
-							}
-							parameter := config.ParameterConfig{
-								Name:        name,
-								Required:    required,
-								Description: "", // OpenAPI schema 中没有 Description 字段
-								In:          "body",
-							}
-							parameters = append(parameters, parameter)
-						}
-					}
-				}
-			}
-
-			endpoint.Parameters = parameters
-
-			// 处理响应
-			responseConfig := config.ResponseConfig{
-				SuccessCode: 200,
-				ErrorCodes:  make(map[int]string),
-				Transform: config.TransformConfig{
-					Type: "direct",
-				},
-			}
-
-			for code, response := range operation.Responses {
-				codeInt := 0
-				if code == "default" {
-					codeInt = 200
-				} else {
-					fmt.Sscanf(code, "%d", &codeInt)
-				}
-
-				if codeInt >= 200 && codeInt < 300 {
-					responseConfig.SuccessCode = codeInt
-				} else {
-					responseConfig.ErrorCodes[codeInt] = response.Description
-				}
-			}
-
-			endpoint.Response = responseConfig
-
-			// 处理身份验证
-			if len(operation.Security) > 0 {
-				for _, securityReq := range operation.Security {
-					for scheme := range securityReq {
-						if securityScheme, ok := securitySchemes[scheme]; ok {
-							authConfig := config.AuthConfig{}
-
-							switch securityScheme.Type {
-							case "apiKey":
-								authConfig.Type = "api_key"
-								authConfig.HeaderName = securityScheme.Name
-								authConfig.KeyEnv = fmt.Sprintf("%s_API_KEY", strings.ToUpper(scheme))
-							case "http":
-								if securityScheme.Scheme == "bearer" {
-									authConfig.Type = "bearer"
-									authConfig.TokenEnv = fmt.Sprintf("%s_TOKEN", strings.ToUpper(scheme))
-								} else if securityScheme.Scheme == "basic" {
-									authConfig.Type = "basic"
-									authConfig.Username = ""
-									authConfig.Password = ""
-								}
-							case "oauth2":
-								authConfig.Type = "oauth2"
-								authConfig.TokenEnv = fmt.Sprintf("%s_TOKEN", strings.ToUpper(scheme))
-							}
-
-							endpoint.Authentication = authConfig
-							break
-						}
-					}
-				}
-			}
-
-			endpoints = append(endpoints, endpoint)
 		}
 	}
+	
+	return nil, "", "", fmt.Errorf("未找到操作ID为 %s 的操作", operationID)
+}
 
-	return endpoints
+// generateOperationID 根据HTTP方法和路径生成操作ID
+func generateOperationID(method, path string) string {
+	// 移除路径开头的斜杠
+	path = strings.TrimPrefix(path, "/")
+	
+	// 将路径转换为驼峰命名
+	parts := strings.Split(path, "/")
+	var result []string
+	
+	for _, part := range parts {
+		// 移除路径参数
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			continue
+		}
+		
+		// 转换为驼峰命名
+		if len(part) > 0 {
+			result = append(result, strings.Title(part))
+		}
+	}
+	
+	// 组合方法名和路径
+	operationID := strings.ToLower(method) + strings.Join(result, "")
+	
+	return operationID
+}
+
+// GetOperationByPathAndMethod 根据路径和方法获取操作
+func GetOperationByPathAndMethod(spec *config.OpenAPISpec, path string, method string) (*config.Operation, error) {
+	pathItem, exists := spec.Paths[path]
+	if !exists {
+		return nil, fmt.Errorf("未找到路径: %s", path)
+	}
+	
+	operation, exists := pathItem[strings.ToLower(method)]
+	if !exists {
+		return nil, fmt.Errorf("未找到方法: %s", method)
+	}
+	
+	return &operation, nil
+}
+
+// GetSecurityScheme 获取安全方案
+func GetSecurityScheme(spec *config.OpenAPISpec, schemeName string) (*config.SecurityScheme, error) {
+	if spec.Components.SecuritySchemes == nil {
+		return nil, fmt.Errorf("未定义安全方案")
+	}
+	
+	scheme, exists := spec.Components.SecuritySchemes[schemeName]
+	if !exists {
+		return nil, fmt.Errorf("未找到安全方案: %s", schemeName)
+	}
+	
+	return &scheme, nil
+}
+
+// GetBaseURL 获取基础URL
+func GetBaseURL(spec *config.OpenAPISpec) string {
+	if len(spec.Servers) > 0 {
+		return spec.Servers[0].URL
+	}
+	return ""
 }
 
 // isHTTPMethod 检查字符串是否为HTTP方法

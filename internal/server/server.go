@@ -32,10 +32,10 @@ type Server struct {
 }
 
 // NewServer 创建新的服务器实例
-func NewServer(cfg *config.Config) (*Server, error) {
+func NewServer(cfg *config.Config, spec *config.OpenAPISpec) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	
-	reqHandler, err := handler.NewRequestHandler(cfg)
+	reqHandler, err := handler.NewRequestHandler(cfg, spec)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("创建请求处理器失败: %w", err)

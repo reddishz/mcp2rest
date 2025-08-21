@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-
+	"net/url"
 	"strings"
-	"text/template"
 
 	"github.com/mcp2rest/internal/auth"
 	"github.com/mcp2rest/internal/config"
+	"github.com/mcp2rest/internal/openapi"
 	"github.com/mcp2rest/internal/transformer"
 	"github.com/mcp2rest/pkg/mcp"
 )
@@ -19,13 +19,14 @@ import (
 // RequestHandler 处理API请求
 type RequestHandler struct {
 	config      *config.Config
+	openAPISpec *config.OpenAPISpec
 	httpClient  *http.Client
 	transformer *transformer.ResponseTransformer
 	auth        *auth.AuthManager
 }
 
 // NewRequestHandler 创建新的请求处理器
-func NewRequestHandler(cfg *config.Config) (*RequestHandler, error) {
+func NewRequestHandler(cfg *config.Config, spec *config.OpenAPISpec) (*RequestHandler, error) {
 	transformer, err := transformer.NewResponseTransformer()
 	if err != nil {
 		return nil, fmt.Errorf("创建响应转换器失败: %w", err)
@@ -38,6 +39,7 @@ func NewRequestHandler(cfg *config.Config) (*RequestHandler, error) {
 
 	return &RequestHandler{
 		config:      cfg,
+		openAPISpec: spec,
 		httpClient:  &http.Client{Timeout: cfg.Global.Timeout},
 		transformer: transformer,
 		auth:        authManager,
@@ -46,20 +48,20 @@ func NewRequestHandler(cfg *config.Config) (*RequestHandler, error) {
 
 // HandleRequest 处理工具调用请求
 func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCallResult, error) {
-	// 查找端点配置
-	endpoint, err := h.config.GetEndpointByName(params.Name)
+	// 根据操作ID查找操作
+	operation, method, path, err := openapi.GetOperationByID(h.openAPISpec, params.Name)
 	if err != nil {
-		return nil, fmt.Errorf("查找端点配置失败: %w", err)
+		return nil, fmt.Errorf("查找操作失败: %w", err)
 	}
 
 	// 构建HTTP请求
-	req, err := h.buildHTTPRequest(endpoint, params.Parameters)
+	req, err := h.buildHTTPRequest(operation, method, path, params.Parameters)
 	if err != nil {
 		return nil, fmt.Errorf("构建HTTP请求失败: %w", err)
 	}
 
 	// 添加身份验证
-	if err := h.auth.ApplyAuth(req, &endpoint.Authentication); err != nil {
+	if err := h.applyAuthentication(req, operation); err != nil {
 		return nil, fmt.Errorf("应用身份验证失败: %w", err)
 	}
 
@@ -82,10 +84,12 @@ func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCal
 	}
 
 	// 检查状态码
-	if resp.StatusCode != endpoint.Response.SuccessCode {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errorMsg := fmt.Sprintf("API返回错误状态码: %d", resp.StatusCode)
-		if errMsg, ok := endpoint.Response.ErrorCodes[resp.StatusCode]; ok {
-			errorMsg = errMsg
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			errorMsg = "客户端错误"
+		} else if resp.StatusCode >= 500 {
+			errorMsg = "服务器错误"
 		}
 		return &mcp.ToolCallResult{
 			Type:   "error",
@@ -93,153 +97,150 @@ func (h *RequestHandler) HandleRequest(params *mcp.ToolCallParams) (*mcp.ToolCal
 			Result: map[string]interface{}{
 				"message": errorMsg,
 				"code":    resp.StatusCode,
+				"body":    string(body),
 			},
 		}, nil
 	}
 
 	// 转换响应
-	transformedResp, err := h.transformer.Transform(body, &endpoint.Response.Transform)
+	result, err := h.transformer.TransformResponse(body, operation.Responses)
 	if err != nil {
 		return nil, fmt.Errorf("转换响应失败: %w", err)
 	}
 
-	// 返回结果
 	return &mcp.ToolCallResult{
 		Type:   "success",
 		Status: "success",
-		Result: transformedResp,
+		Result: result,
 	}, nil
 }
 
 // buildHTTPRequest 构建HTTP请求
-func (h *RequestHandler) buildHTTPRequest(endpoint *config.EndpointConfig, params map[string]interface{}) (*http.Request, error) {
-	// 处理URL模板
-	url, err := h.processURLTemplate(endpoint.URLTemplate, params)
-	if err != nil {
-		return nil, fmt.Errorf("处理URL模板失败: %w", err)
+func (h *RequestHandler) buildHTTPRequest(operation *config.Operation, method, path string, params map[string]interface{}) (*http.Request, error) {
+	// 获取基础URL
+	baseURL := openapi.GetBaseURL(h.openAPISpec)
+	if baseURL == "" {
+		return nil, fmt.Errorf("OpenAPI规范中未定义服务器URL")
+	}
+
+	// 构建完整URL
+	fullURL := baseURL + path
+
+	// 处理路径参数
+	for _, param := range operation.Parameters {
+		if param.In == "path" {
+			if value, exists := params[param.Name]; exists {
+				fullURL = strings.ReplaceAll(fullURL, "{"+param.Name+"}", fmt.Sprintf("%v", value))
+			} else if param.Required {
+				return nil, fmt.Errorf("缺少必需的路径参数: %s", param.Name)
+			}
+		}
 	}
 
 	// 处理查询参数
-	queryParams := make(map[string]string)
-	for _, param := range endpoint.Parameters {
-		if param.In == "query" {
-			value, exists := params[param.Name]
-			if !exists && param.Required {
-				return nil, fmt.Errorf("缺少必需的查询参数: %s", param.Name)
-			}
-			if !exists && param.Default != nil {
-				value = param.Default
-			}
-			if value != nil {
-				queryParams[param.Name] = fmt.Sprintf("%v", value)
+	if method == "GET" || method == "DELETE" {
+		queryParams := url.Values{}
+		for _, param := range operation.Parameters {
+			if param.In == "query" {
+				if value, exists := params[param.Name]; exists {
+					queryParams.Set(param.Name, fmt.Sprintf("%v", value))
+				} else if param.Required {
+					return nil, fmt.Errorf("缺少必需的查询参数: %s", param.Name)
+				}
 			}
 		}
-	}
-
-	// 添加查询参数到URL
-	if len(queryParams) > 0 {
-		queryString := ""
-		for key, value := range queryParams {
-			if queryString == "" {
-				queryString = "?"
-			} else {
-				queryString += "&"
-			}
-			queryString += fmt.Sprintf("%s=%s", key, value)
+		if len(queryParams) > 0 {
+			fullURL += "?" + queryParams.Encode()
 		}
-		url += queryString
-	}
-
-	// 处理请求体
-	var body []byte
-	var contentType string
-	bodyParams := make(map[string]interface{})
-	for _, param := range endpoint.Parameters {
-		if param.In == "body" {
-			value, exists := params[param.Name]
-			if !exists && param.Required {
-				return nil, fmt.Errorf("缺少必需的请求体参数: %s", param.Name)
-			}
-			if !exists && param.Default != nil {
-				value = param.Default
-			}
-			if value != nil {
-				bodyParams[param.Name] = value
-			}
-		}
-	}
-
-	// 如果有请求体参数，则序列化为JSON
-	if len(bodyParams) > 0 {
-		var err error
-		body, err = json.Marshal(bodyParams)
-		if err != nil {
-			return nil, fmt.Errorf("序列化请求体失败: %w", err)
-		}
-		contentType = "application/json"
 	}
 
 	// 创建请求
-	req, err := http.NewRequest(endpoint.Method, url, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("创建HTTP请求失败: %w", err)
-	}
+	var req *http.Request
+	var err error
 
-	// 设置内容类型
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-
-	// 处理头参数
-	for _, param := range endpoint.Parameters {
-		if param.In == "header" {
-			value, exists := params[param.Name]
-			if !exists && param.Required {
-				return nil, fmt.Errorf("缺少必需的头参数: %s", param.Name)
+	if method == "POST" || method == "PUT" || method == "PATCH" {
+		// 处理请求体
+		var body []byte
+		if operation.RequestBody.Content != nil {
+			// 构建请求体
+			requestBody := make(map[string]interface{})
+			for _, param := range operation.Parameters {
+				if param.In == "body" {
+					if value, exists := params[param.Name]; exists {
+						requestBody[param.Name] = value
+					} else if param.Required {
+						return nil, fmt.Errorf("缺少必需的请求体参数: %s", param.Name)
+					}
+				}
 			}
-			if !exists && param.Default != nil {
-				value = param.Default
+			
+			// 如果没有从参数中获取到请求体，尝试使用整个参数对象
+			if len(requestBody) == 0 && len(params) > 0 {
+				requestBody = params
 			}
-			if value != nil {
-				req.Header.Set(param.Name, fmt.Sprintf("%v", value))
+			
+			body, err = json.Marshal(requestBody)
+			if err != nil {
+				return nil, fmt.Errorf("序列化请求体失败: %w", err)
 			}
+		}
+		
+		req, err = http.NewRequest(method, fullURL, bytes.NewBuffer(body))
+		if err != nil {
+			return nil, fmt.Errorf("创建HTTP请求失败: %w", err)
+		}
+		
+		// 设置Content-Type
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req, err = http.NewRequest(method, fullURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("创建HTTP请求失败: %w", err)
 		}
 	}
 
 	return req, nil
 }
 
-// processURLTemplate 处理URL模板
-func (h *RequestHandler) processURLTemplate(urlTemplate string, params map[string]interface{}) (string, error) {
-	// 使用简单的字符串替换
-	result := urlTemplate
-	for key, value := range params {
-		placeholder := fmt.Sprintf("{%s}", key)
-		if strings.Contains(result, placeholder) {
-			result = strings.ReplaceAll(result, placeholder, fmt.Sprintf("%v", value))
-		}
+// applyAuthentication 应用身份验证
+func (h *RequestHandler) applyAuthentication(req *http.Request, operation *config.Operation) error {
+	if len(operation.Security) == 0 {
+		return nil // 无需身份验证
 	}
 
-	// 检查是否还有未替换的占位符
-	if strings.Contains(result, "{") && strings.Contains(result, "}") {
-		// 尝试使用模板引擎进行更复杂的替换
-		tmpl, err := template.New("url").Parse(urlTemplate)
+	// 获取第一个安全要求
+	securityReq := operation.Security[0]
+	for schemeName := range securityReq {
+		// 获取安全方案
+		securityScheme, err := openapi.GetSecurityScheme(h.openAPISpec, schemeName)
 		if err != nil {
-			return "", fmt.Errorf("解析URL模板失败: %w", err)
+			return fmt.Errorf("获取安全方案失败: %w", err)
 		}
 
-		var buf bytes.Buffer
-		if err := tmpl.Execute(&buf, params); err != nil {
-			return "", fmt.Errorf("执行URL模板失败: %w", err)
+		// 创建认证配置
+		authConfig := &config.AuthConfig{}
+		switch securityScheme.Type {
+		case "apiKey":
+			authConfig.Type = "api_key"
+			authConfig.HeaderName = securityScheme.Name
+			authConfig.KeyEnv = fmt.Sprintf("%s_API_KEY", strings.ToUpper(schemeName))
+		case "http":
+			if securityScheme.Scheme == "bearer" {
+				authConfig.Type = "bearer"
+				authConfig.TokenEnv = fmt.Sprintf("%s_TOKEN", strings.ToUpper(schemeName))
+			} else if securityScheme.Scheme == "basic" {
+				authConfig.Type = "basic"
+				authConfig.Username = ""
+				authConfig.Password = ""
+			}
+		case "oauth2":
+			authConfig.Type = "oauth2"
+			authConfig.TokenEnv = fmt.Sprintf("%s_TOKEN", strings.ToUpper(schemeName))
 		}
 
-		result = buf.String()
+		// 应用认证
+		return h.auth.ApplyAuth(req, authConfig)
 	}
 
-	// 检查是否还有未替换的占位符
-	if strings.Contains(result, "{") && strings.Contains(result, "}") {
-		return "", fmt.Errorf("URL模板中存在未替换的占位符: %s", result)
-	}
-
-	return result, nil
+	return nil
 }

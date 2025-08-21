@@ -18,28 +18,14 @@ func NewResponseTransformer() (*ResponseTransformer, error) {
 	return &ResponseTransformer{}, nil
 }
 
-// Transform 转换API响应
-func (t *ResponseTransformer) Transform(data []byte, transformConfig *config.TransformConfig) (interface{}, error) {
-	if transformConfig == nil || transformConfig.Type == "" || transformConfig.Type == "direct" {
-		// 直接返回JSON解析后的响应
-		var result interface{}
-		if err := json.Unmarshal(data, &result); err != nil {
-			return nil, fmt.Errorf("解析JSON响应失败: %w", err)
-		}
-		return result, nil
+// TransformResponse 转换API响应，基于OpenAPI响应定义
+func (t *ResponseTransformer) TransformResponse(data []byte, responses map[string]config.Response) (interface{}, error) {
+	// 直接返回JSON解析后的响应
+	var result interface{}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("解析JSON响应失败: %w", err)
 	}
-
-	switch transformConfig.Type {
-	case "jq":
-		return t.transformWithJQ(data, transformConfig.Expression)
-	case "template":
-		return t.transformWithTemplate(data, transformConfig.Template)
-	case "custom":
-		// 自定义转换逻辑可以在这里实现
-		return nil, fmt.Errorf("自定义转换尚未实现")
-	default:
-		return nil, fmt.Errorf("不支持的转换类型: %s", transformConfig.Type)
-	}
+	return result, nil
 }
 
 // transformWithJQ 使用JQ表达式转换响应
