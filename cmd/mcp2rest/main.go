@@ -62,21 +62,21 @@ func main() {
 
 	logging.Logger.Printf("MCP2REST 服务器已启动，模式: %s", cfg.Server.Mode)
 
-	// 设置信号处理
+	// 设置信号处理 - 根据 MCP 标准协议
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	
 	// 等待信号或服务器停止
 	select {
 	case sig := <-sigCh:
-		logging.Logger.Printf("收到信号: %v", sig)
+		logging.Logger.Printf("收到信号: %v (SIGTERM/SIGINT)，开始优雅关闭", sig)
 		// 立即取消上下文
 		srv.Cancel()
 		// 给服务器一点时间优雅关闭
 		logging.Logger.Println("正在关闭服务器...")
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	case <-srv.Done():
-		logging.Logger.Printf("服务器已停止")
+		logging.Logger.Printf("服务器已停止 (可能是 stdin EOF 或 stdout 写入错误)")
 	}
 	
 	// 强制退出进程，确保不会有残留

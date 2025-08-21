@@ -249,31 +249,12 @@ func (s *Server) startStdioServer() error {
 				// 继续读取
 			}
 			
-			// 使用带超时的读取，避免永久阻塞
-			// 设置一个很短的超时时间，让协程能够快速响应取消信号
-			done := make(chan struct{})
-			var line string
-			var err error
-			
-			go func() {
-				line, err = reader.ReadString('\n')
-				close(done)
-			}()
-			
-			select {
-			case <-done:
-				// 读取完成
-			case <-s.ctx.Done():
-				logging.Logger.Println("读取协程在读取过程中收到关闭信号")
-				return
-			case <-time.After(50 * time.Millisecond):
-				// 读取超时，继续循环检查上下文
-				continue
-			}
+			// 直接读取，不使用超时，让系统自然处理 EOF
+			line, err := reader.ReadString('\n')
 			
 			if err != nil {
 				if err == io.EOF {
-					logging.Logger.Println("标准输入已关闭，退出服务器")
+					logging.Logger.Println("标准输入已关闭 (EOF)，这是最重要的关闭信号")
 					s.cancel()
 					return
 				}
@@ -401,10 +382,18 @@ func (s *Server) processRequest(task *requestTask) {
 			return
 		}
 		
-		// 直接使用 os.Stdout
+		// 直接使用 os.Stdout，并检查写入错误
 		logging.Logger.Printf("发送响应: %s", string(res.response))
-		os.Stdout.Write(res.response)
-		os.Stdout.Write([]byte("\n"))
+		if _, err := os.Stdout.Write(res.response); err != nil {
+			logging.Logger.Printf("写入 stdout 失败: %v，Client 可能已断开连接")
+			s.cancel() // 触发关闭流程
+			return
+		}
+		if _, err := os.Stdout.Write([]byte("\n")); err != nil {
+			logging.Logger.Printf("写入换行符失败: %v，Client 可能已断开连接")
+			s.cancel() // 触发关闭流程
+			return
+		}
 		logging.Logger.Printf("响应发送完成")
 	}
 }
