@@ -146,7 +146,10 @@ func getServerName(mode string) string {
 // startSSEServer 启动SSE服务器
 func (s *Server) startSSEServer() error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleSSE)
+	
+	// 分离端点：SSE 连接和消息处理
+	mux.HandleFunc("/sse", s.handleSSEConnection)  // GET: 建立 SSE 连接
+	mux.HandleFunc("/api", s.handleSSEMessage)     // POST: 处理 MCP 消息
 
 	addr := fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port)
 	s.httpServer = &http.Server{
@@ -155,11 +158,18 @@ func (s *Server) startSSEServer() error {
 	}
 
 	logging.Logger.Printf("SSE服务器启动在 %s", addr)
+	logging.Logger.Printf("SSE连接端点: %s/sse", addr)
+	logging.Logger.Printf("消息处理端点: %s/api", addr)
 	return s.httpServer.ListenAndServe()
 }
 
-// handleSSE 处理SSE连接
-func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+// handleSSEConnection 处理SSE连接建立 (GET /sse)
+func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	// 设置SSE头
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -175,104 +185,126 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.Logger.Printf("新的SSE连接: %s", r.RemoteAddr)
+	// 创建客户端连接标识
+	clientID := fmt.Sprintf("%s-%d", r.RemoteAddr, time.Now().UnixNano())
+	
+	// 创建连接上下文
+	connCtx, connCancel := context.WithCancel(r.Context())
+	
+	// 创建SSE连接
+	conn := &SSEConnection{
+		ID:         clientID,
+		Writer:     w,
+		Flusher:    flusher,
+		Context:    connCtx,
+		Cancel:     connCancel,
+		RemoteAddr: r.RemoteAddr,
+	}
+
+	// 注册连接
+	s.sseMutex.Lock()
+	s.sseConnections[clientID] = conn
+	s.sseMutex.Unlock()
+
+	logging.Logger.Printf("SSE客户端连接: %s", clientID)
 
 	// 记录调试信息
 	debug.LogInfo("SSE连接建立", map[string]interface{}{
 		"remote_addr": r.RemoteAddr,
 		"method":      r.Method,
 		"url":         r.URL.String(),
+		"client_id":   clientID,
 		"headers":     r.Header,
 	})
 
-	// 处理POST请求（客户端发送消息）
-	if r.Method == "POST" {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			logging.Logger.Printf("读取请求体失败: %v", err)
-			debug.LogError("读取SSE请求体失败", err)
-			http.Error(w, "读取请求体失败", http.StatusBadRequest)
+	// 发送连接建立消息
+	fmt.Fprintf(w, "data: {\"type\":\"connected\",\"message\":\"SSE连接已建立\",\"clientId\":\"%s\"}\n\n", clientID)
+	flusher.Flush()
+
+	// 使用 goroutine 处理长连接，避免阻塞
+	go s.handleSSELongConnection(clientID, conn)
+
+	// 立即返回，不阻塞 HTTP 服务器
+}
+
+// handleSSELongConnection 在 goroutine 中处理 SSE 长连接
+func (s *Server) handleSSELongConnection(clientID string, conn *SSEConnection) {
+	defer s.removeSSEConnection(clientID)
+
+	// 保持连接活跃
+	for {
+		select {
+		case <-s.ctx.Done():
+			logging.Logger.Printf("服务器关闭，SSE连接关闭: %s", clientID)
 			return
-		}
-
-		// 记录请求详情
-		debug.LogRequest("POST", r.URL.Path, map[string]string{
-			"Content-Type": r.Header.Get("Content-Type"),
-			"User-Agent":   r.Header.Get("User-Agent"),
-		}, body)
-
-		// 处理MCP请求
-		response, err := s.handleMCPRequest(body)
-		if err != nil {
-			logging.Logger.Printf("处理MCP请求失败: %v", err)
-			debug.LogError("处理MCP请求失败", err)
-			http.Error(w, "处理请求失败", http.StatusInternalServerError)
+		case <-conn.Context.Done():
+			logging.Logger.Printf("客户端断开连接: %s", clientID)
 			return
+		case <-time.After(30 * time.Second):
+			// 每30秒发送一次心跳，保持连接活跃
+			s.sseMutex.RLock()
+			if currentConn, exists := s.sseConnections[clientID]; exists {
+				fmt.Fprintf(currentConn.Writer, "data: {\"type\":\"heartbeat\",\"timestamp\":\"%s\",\"clientId\":\"%s\"}\n\n", 
+					time.Now().Format(time.RFC3339), clientID)
+				currentConn.Flusher.Flush()
+			}
+			s.sseMutex.RUnlock()
 		}
+	}
+}
 
-		// 记录响应详情
-		responseHeaders := make(map[string]string)
-		for key, values := range w.Header() {
-			responseHeaders[key] = values[0] // 取第一个值
-		}
-		debug.LogResponse(200, responseHeaders, response)
-
-		// 发送SSE响应
-		fmt.Fprintf(w, "data: %s\n\n", string(response))
-		flusher.Flush()
+// handleSSEMessage 处理SSE消息 (POST /api)
+func (s *Server) handleSSEMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 处理GET请求（建立SSE长连接）
-	if r.Method == "GET" {
-		// 创建客户端连接标识
-		clientID := fmt.Sprintf("%s-%d", r.RemoteAddr, time.Now().UnixNano())
-		
-		// 创建连接上下文
-		connCtx, connCancel := context.WithCancel(r.Context())
-		
-		// 创建SSE连接
-		conn := &SSEConnection{
-			ID:         clientID,
-			Writer:     w,
-			Flusher:    flusher,
-			Context:    connCtx,
-			Cancel:     connCancel,
-			RemoteAddr: r.RemoteAddr,
-		}
+	// 设置响应头
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-		// 注册连接
-		s.sseMutex.Lock()
-		s.sseConnections[clientID] = conn
-		s.sseMutex.Unlock()
-
-		logging.Logger.Printf("SSE客户端连接: %s", clientID)
-
-		// 发送连接建立消息
-		fmt.Fprintf(w, "data: {\"type\":\"connected\",\"message\":\"SSE连接已建立\",\"clientId\":\"%s\"}\n\n", clientID)
-		flusher.Flush()
-
-		// 保持连接活跃
-		for {
-			select {
-			case <-s.ctx.Done():
-				logging.Logger.Printf("服务器关闭，SSE连接关闭: %s", clientID)
-				s.removeSSEConnection(clientID)
-				return
-			case <-connCtx.Done():
-				logging.Logger.Printf("客户端断开连接: %s", clientID)
-				s.removeSSEConnection(clientID)
-				return
-			case <-time.After(30 * time.Second):
-				// 每30秒发送一次心跳，保持连接活跃
-				fmt.Fprintf(w, "data: {\"type\":\"heartbeat\",\"timestamp\":\"%s\",\"clientId\":\"%s\"}\n\n", 
-					time.Now().Format(time.RFC3339), clientID)
-				flusher.Flush()
-			}
-		}
+	// 处理 OPTIONS 预检请求
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		logging.Logger.Printf("读取请求体失败: %v", err)
+		debug.LogError("读取SSE请求体失败", err)
+		http.Error(w, "读取请求体失败", http.StatusBadRequest)
+		return
+	}
+
+	// 记录请求详情
+	debug.LogRequest("POST", r.URL.Path, map[string]string{
+		"Content-Type": r.Header.Get("Content-Type"),
+		"User-Agent":   r.Header.Get("User-Agent"),
+	}, body)
+
+	// 处理MCP请求
+	response, err := s.handleMCPRequest(body)
+	if err != nil {
+		logging.Logger.Printf("处理MCP请求失败: %v", err)
+		debug.LogError("处理MCP请求失败", err)
+		http.Error(w, "处理请求失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 记录响应详情
+	responseHeaders := make(map[string]string)
+	for key, values := range w.Header() {
+		responseHeaders[key] = values[0] // 取第一个值
+	}
+	debug.LogResponse(200, responseHeaders, response)
+
+	// 发送响应
+	w.WriteHeader(http.StatusOK)
+	w.Write(response)
 }
 
 // removeSSEConnection 移除SSE连接

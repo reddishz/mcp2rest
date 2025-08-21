@@ -10,7 +10,7 @@ export APIKEYAUTH_API_KEY="ded45a001ffb9c47b1e29fcbdd6bcec6"
 
 # 检查 SSE 服务器是否运行
 echo "检查 SSE 服务器状态..."
-if curl -s http://localhost:8088/ > /dev/null 2>&1; then
+if curl -s http://localhost:8088/sse > /dev/null 2>&1; then
     echo "✅ SSE 服务器正在运行"
 else
     echo "❌ SSE 服务器未运行，正在启动..."
@@ -18,7 +18,7 @@ else
     SERVER_PID=$!
     sleep 3
     
-    if ! curl -s http://localhost:8088/ > /dev/null 2>&1; then
+    if ! curl -s http://localhost:8088/sse > /dev/null 2>&1; then
         echo "❌ SSE 服务器启动失败"
         exit 1
     fi
@@ -28,7 +28,7 @@ fi
 echo ""
 echo "===== 测试 1: 建立 SSE 连接 ====="
 echo "发送 GET 请求建立 SSE 连接..."
-curl -N -H "Accept: text/event-stream" http://localhost:8088/ &
+curl -N -H "Accept: text/event-stream" http://localhost:8088/sse &
 SSE_PID=$!
 
 # 等待连接建立
@@ -71,7 +71,7 @@ echo "$INIT_REQUEST" | jq '.'
 
 echo ""
 echo "发送请求..."
-RESPONSE=$(curl -s -X POST http://localhost:8088/ \
+RESPONSE=$(curl -s -X POST http://localhost:8088/api \
   -H "Content-Type: application/json" \
   -d "$INIT_REQUEST")
 
@@ -88,7 +88,7 @@ TOOLS_REQUEST='{
 }'
 
 echo "发送工具列表请求..."
-TOOLS_RESPONSE=$(curl -s -X POST http://localhost:8088/ \
+TOOLS_RESPONSE=$(curl -s -X POST http://localhost:8088/api \
   -H "Content-Type: application/json" \
   -d "$TOOLS_REQUEST")
 

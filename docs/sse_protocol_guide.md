@@ -6,12 +6,12 @@ MCP (Model Context Protocol) 协议支持多种传输层，包括 stdio 和 SSE 
 
 ## SSE 传输层架构
 
-### 双向通信模式
+### 分离端点设计
 
-SSE 传输层通过以下方式实现双向通信：
+为了避免阻塞问题和协议混淆，SSE 传输层使用分离的端点：
 
-1. **GET 请求**：建立长连接，用于服务器向客户端推送消息
-2. **POST 请求**：客户端向服务器发送消息
+1. **GET /sse**：建立 SSE 长连接，用于服务器向客户端推送消息
+2. **POST /api**：客户端向服务器发送 MCP 消息
 3. **连接管理**：服务器维护多个 SSE 连接，支持广播和定向推送
 
 ### 协议流程
@@ -19,11 +19,11 @@ SSE 传输层通过以下方式实现双向通信：
 ```
 客户端                                   服务器
    |                                       |
-   |-- GET / (建立SSE连接) ---------------->|
+   |-- GET /sse (建立SSE连接) ------------>|
    |<-- data: {"type":"connected",...} ----|
    |                                       |
-   |-- POST / (发送MCP请求) --------------->|
-   |<-- data: {"jsonrpc":"2.0",...} -------|
+   |-- POST /api (发送MCP请求) ----------->|
+   |<-- {"jsonrpc":"2.0",...} -------------|
    |                                       |
    |<-- data: {"type":"heartbeat",...} ----|
    |                                       |
@@ -31,10 +31,10 @@ SSE 传输层通过以下方式实现双向通信：
 
 ## 实现细节
 
-### 1. 连接建立 (GET 请求)
+### 1. 连接建立 (GET /sse)
 
 ```http
-GET / HTTP/1.1
+GET /sse HTTP/1.1
 Accept: text/event-stream
 Cache-Control: no-cache
 ```
@@ -55,10 +55,10 @@ data: {"type":"connected","message":"SSE连接已建立","clientId":"127.0.0.1-1
 
 ```
 
-### 2. 消息发送 (POST 请求)
+### 2. 消息发送 (POST /api)
 
 ```http
-POST / HTTP/1.1
+POST /api HTTP/1.1
 Content-Type: application/json
 
 {
@@ -77,9 +77,11 @@ Content-Type: application/json
 ```
 
 **服务器响应：**
-```
-data: {"jsonrpc":"2.0","id":"1","result":{...}}
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
 
+{"jsonrpc":"2.0","id":"1","result":{...}}
 ```
 
 ### 3. 心跳机制
@@ -101,16 +103,16 @@ data: {"type":"heartbeat","timestamp":"2024-01-01T12:00:00Z","clientId":"127.0.0
 
 ### 连接生命周期
 
-1. **建立**：客户端发送 GET 请求
+1. **建立**：客户端发送 GET /sse 请求
 2. **注册**：服务器将连接添加到连接池
-3. **活跃**：定期发送心跳，处理消息
+3. **活跃**：在独立的 goroutine 中处理心跳
 4. **清理**：连接断开时自动清理
 
-### 错误处理
+### 非阻塞设计
 
-- **连接断开**：自动检测并清理连接
-- **写入失败**：记录错误并关闭连接
-- **超时处理**：心跳超时自动清理
+- **GET /sse**：立即返回，长连接在 goroutine 中处理
+- **POST /api**：独立的端点，不受 SSE 连接影响
+- **并发支持**：可以同时处理多个连接和消息
 
 ## 使用示例
 
@@ -118,7 +120,7 @@ data: {"type":"heartbeat","timestamp":"2024-01-01T12:00:00Z","clientId":"127.0.0
 
 ```javascript
 // 建立 SSE 连接
-const eventSource = new EventSource('http://localhost:8088/');
+const eventSource = new EventSource('http://localhost:8088/sse');
 
 eventSource.onmessage = function(event) {
     const data = JSON.parse(event.data);
@@ -131,7 +133,7 @@ eventSource.onopen = function() {
 
 // 发送 MCP 请求
 async function sendMCPRequest(method, params) {
-    const response = await fetch('http://localhost:8088/', {
+    const response = await fetch('http://localhost:8088/api', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -144,7 +146,7 @@ async function sendMCPRequest(method, params) {
         })
     });
     
-    return response.text();
+    return response.json();
 }
 
 // 初始化连接
@@ -161,30 +163,33 @@ sendMCPRequest('initialize', {
 ### 服务器端实现
 
 ```go
-// 连接管理
-type SSEConnection struct {
-    ID         string
-    Writer     http.ResponseWriter
-    Flusher    http.Flusher
-    Context    context.Context
-    Cancel     context.CancelFunc
-    RemoteAddr string
+// 分离的端点处理
+func (s *Server) startSSEServer() error {
+    mux := http.NewServeMux()
+    
+    // 分离端点：SSE 连接和消息处理
+    mux.HandleFunc("/sse", s.handleSSEConnection)  // GET: 建立 SSE 连接
+    mux.HandleFunc("/api", s.handleSSEMessage)     // POST: 处理 MCP 消息
+    
+    // ... 服务器配置
 }
 
-// 广播消息
-func (s *Server) broadcastToSSE(message []byte) {
-    s.sseMutex.RLock()
-    defer s.sseMutex.RUnlock()
+// 非阻塞的 SSE 连接处理
+func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
+    // 设置 SSE 头
+    // 创建连接
+    // 注册到连接池
+    
+    // 使用 goroutine 处理长连接，避免阻塞
+    go s.handleSSELongConnection(clientID, conn)
+    
+    // 立即返回，不阻塞 HTTP 服务器
+}
 
-    for clientID, conn := range s.sseConnections {
-        select {
-        case <-conn.Context.Done():
-            continue
-        default:
-            fmt.Fprintf(conn.Writer, "data: %s\n\n", string(message))
-            conn.Flusher.Flush()
-        }
-    }
+// 独立的消息处理
+func (s *Server) handleSSEMessage(w http.ResponseWriter, r *http.Request) {
+    // 处理 MCP 消息
+    // 返回 JSON 响应
 }
 ```
 
@@ -198,10 +203,28 @@ func (s *Server) broadcastToSSE(message []byte) {
 
 测试脚本会：
 1. 启动 SSE 服务器
-2. 建立 SSE 连接
-3. 发送 MCP 初始化请求
-4. 发送工具列表请求
+2. 建立 SSE 连接 (GET /sse)
+3. 发送 MCP 初始化请求 (POST /api)
+4. 发送工具列表请求 (POST /api)
 5. 验证响应格式
+
+## 优势
+
+### 1. 解决阻塞问题
+- GET 请求立即返回，长连接在 goroutine 中处理
+- POST 请求独立处理，不受 SSE 连接影响
+
+### 2. 协议清晰分离
+- SSE 连接和消息处理使用不同端点
+- 职责明确，易于理解和维护
+
+### 3. 支持并发
+- 可以同时处理多个 SSE 连接
+- 可以同时处理多个消息请求
+
+### 4. 错误隔离
+- SSE 连接错误不影响消息处理
+- 消息处理错误不影响 SSE 连接
 
 ## 注意事项
 
@@ -218,9 +241,10 @@ func (s *Server) broadcastToSSE(message []byte) {
 | 传输协议 | HTTP/SSE | 标准输入输出 |
 | 连接方式 | 网络连接 | 进程间通信 |
 | 并发支持 | 多连接 | 单连接 |
+| 端点设计 | 分离端点 | 单一端点 |
 | 适用场景 | Web 应用 | 本地工具 |
 | 复杂度 | 中等 | 简单 |
 
 ## 总结
 
-SSE 传输层为 MCP 协议提供了基于 HTTP 的实时双向通信能力，特别适合 Web 应用和浏览器环境。通过正确的连接管理和消息处理，可以实现稳定可靠的 MCP 通信。
+通过分离端点的设计，SSE 传输层解决了阻塞问题和协议混淆问题，为 MCP 协议提供了稳定可靠的基于 HTTP 的实时双向通信能力，特别适合 Web 应用和浏览器环境。
