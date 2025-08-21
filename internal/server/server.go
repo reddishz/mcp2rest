@@ -187,33 +187,47 @@ func (s *Server) startStdioServer() error {
 	
 	// 创建带缓冲的读取器和写入器
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024) // 64KB 缓冲区
-	writer := bufio.NewWriterSize(os.Stdout, 256*1024) // 256KB 缓冲区，增加缓冲区大小
+	writer := bufio.NewWriterSize(os.Stdout, 256*1024) // 256KB 缓冲区
 	defer writer.Flush()
 	
 	// 创建请求通道，用于并发处理
 	requestChan := make(chan *requestTask, 100) // 缓冲通道
-	defer close(requestChan)
+	
+	// 使用 WaitGroup 确保所有协程正确退出
+	var wg sync.WaitGroup
 	
 	// 启动工作协程池
 	workerCount := 4 // 可以根据需要调整
 	for i := 0; i < workerCount; i++ {
-		go s.stdioWorker(requestChan)
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			logging.Logger.Printf("启动工作协程 %d", workerID)
+			s.stdioWorker(requestChan)
+			logging.Logger.Printf("工作协程 %d 已退出", workerID)
+		}(i)
 	}
 	
 	// 启动读取协程
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+		defer close(requestChan) // 确保在读取协程退出时关闭通道
 		defer func() {
 			if r := recover(); r != nil {
 				logging.Logger.Printf("标准输入/输出服务器发生panic: %v", r)
 			}
+			logging.Logger.Println("读取协程已退出")
 			// 确保在读取协程退出时关闭服务器
 			s.cancel()
 		}()
 		
+		logging.Logger.Println("启动读取协程")
+		
 		for {
 			select {
 			case <-s.ctx.Done():
-				logging.Logger.Println("标准输入/输出服务器收到关闭信号")
+				logging.Logger.Println("读取协程收到关闭信号")
 				return
 			default:
 				// 读取一行（JSON消息）
@@ -258,7 +272,12 @@ func (s *Server) startStdioServer() error {
 	
 	// 等待上下文取消
 	<-s.ctx.Done()
-	logging.Logger.Println("标准输入/输出服务器已停止")
+	logging.Logger.Println("标准输入/输出服务器收到停止信号")
+	
+	// 等待所有协程退出
+	logging.Logger.Println("等待所有协程退出...")
+	wg.Wait()
+	logging.Logger.Println("所有协程已退出")
 	
 	// 安全关闭 done 通道
 	select {
@@ -268,6 +287,7 @@ func (s *Server) startStdioServer() error {
 		close(s.done)
 	}
 	
+	logging.Logger.Println("标准输入/输出服务器已停止")
 	return nil
 }
 
@@ -297,14 +317,18 @@ func (s *Server) processRequest(task *requestTask) {
 	ctx, cancel := context.WithTimeout(s.ctx, s.config.Global.Timeout)
 	defer cancel()
 	
-	// 创建带超时的处理通道
-	done := make(chan struct{})
-	var response []byte
-	var err error
+	// 使用通道进行超时控制，减少协程使用
+	type result struct {
+		response []byte
+		err      error
+	}
 	
+	resultChan := make(chan result, 1)
+	
+	// 启动处理协程
 	go func() {
-		response, err = s.handleMCPRequest(task.data)
-		close(done)
+		response, err := s.handleMCPRequest(task.data)
+		resultChan <- result{response: response, err: err}
 	}()
 	
 	// 等待处理完成或超时
@@ -313,22 +337,24 @@ func (s *Server) processRequest(task *requestTask) {
 		logging.Logger.Printf("请求处理超时")
 		// 直接使用 os.Stdout
 		errResp := mcp.NewErrorResponse("", -32001, "Request timed out")
-		response, _ := json.Marshal(errResp)
-		os.Stdout.Write(response)
-		os.Stdout.Write([]byte("\n"))
-	case <-done:
-		if err != nil {
-			logging.Logger.Printf("处理MCP请求失败: %v", err)
-			// 直接使用 os.Stdout
-			errResp := mcp.NewErrorResponse("", -32603, fmt.Sprintf("处理请求失败: %v", err))
-			response, _ := json.Marshal(errResp)
+		if response, err := json.Marshal(errResp); err == nil {
 			os.Stdout.Write(response)
 			os.Stdout.Write([]byte("\n"))
+		}
+	case res := <-resultChan:
+		if res.err != nil {
+			logging.Logger.Printf("处理MCP请求失败: %v", res.err)
+			// 直接使用 os.Stdout
+			errResp := mcp.NewErrorResponse("", -32603, fmt.Sprintf("处理请求失败: %v", res.err))
+			if response, err := json.Marshal(errResp); err == nil {
+				os.Stdout.Write(response)
+				os.Stdout.Write([]byte("\n"))
+			}
 			return
 		}
 		
 		// 直接使用 os.Stdout
-		os.Stdout.Write(response)
+		os.Stdout.Write(res.response)
 		os.Stdout.Write([]byte("\n"))
 	}
 }
