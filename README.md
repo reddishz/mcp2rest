@@ -103,10 +103,43 @@ go build -o bin/mcp2rest cmd/mcp2rest/main.go
 
 ## 配置
 
+### 配置文件
+
 配置文件位于 `configs/` 目录：
 - `bmc_api.yaml`: OpenAPI 规范文件
 - `stdio.yaml`: stdio 版本专用配置
 - `sse.yaml`: SSE 版本专用配置
+
+### 环境变量配置
+
+MCP2REST 使用环境变量来配置 API 认证信息。请按以下步骤配置：
+
+1. **复制环境变量模板**：
+```bash
+cp configs/.env.example configs/.env
+```
+
+2. **编辑 `.env` 文件**，填入实际的认证信息：
+```bash
+# BMC API 认证
+APIKEYAUTH_API_KEY=your_actual_bmc_api_key_here
+
+# 其他配置...
+```
+
+3. **加载环境变量**：
+```bash
+# 方法1：使用 source 命令
+source configs/.env
+
+# 方法2：使用 export 命令
+export APIKEYAUTH_API_KEY="your_actual_bmc_api_key_here"
+```
+
+**重要说明**：
+- `.env` 文件包含敏感信息，不会被提交到版本控制中
+- 请确保在生产环境中正确设置环境变量
+- 测试时可以使用提供的示例 API Key：`ded45a001ffb9c47b1e29fcbdd6bcec6`
 
 ## 主要改进
 
