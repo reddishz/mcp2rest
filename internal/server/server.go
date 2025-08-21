@@ -1,11 +1,12 @@
 package server
 
 import (
+	"github.com/mcp2rest/internal/logging"
+	
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"github.com/mcp2rest/internal/logging"
+	
 	"net/http"
 	"os"
 	"sync"
@@ -104,7 +105,7 @@ func (s *Server) startWebSocketServer() error {
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("升级WebSocket连接失败: %v", err)
+		logging.Logger.Printf("升级WebSocket连接失败: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -121,7 +122,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
-	log.Printf("新的WebSocket连接: %s", conn.RemoteAddr())
+	logging.Logger.Printf("新的WebSocket连接: %s", conn.RemoteAddr())
 
 	for {
 		// 读取消息

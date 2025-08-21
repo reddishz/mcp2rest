@@ -40,7 +40,7 @@ func InitLogger() error {
 		return fmt.Errorf("无法创建日志文件: %v", err)
 	}
 
-	Logger = log.New(file, "SERVER: ", log.Ldate|log.Ltime|log.Lshortfile)
+	Logger = log.New(file, "", log.Ldate|log.Ltime|log.Lshortfile)
 	return nil
 }
 

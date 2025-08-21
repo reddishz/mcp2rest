@@ -1,7 +1,8 @@
 package config
 
 import (
-	"log"
+	"github.com/mcp2rest/internal/logging"
+	
 	"fmt"
 	"path/filepath"
 )
@@ -38,21 +39,21 @@ func LoadConfigWithOpenAPI(apiConfigPath string) (*Config, error) {
 	// 1. 加载服务器配置
 	// 尝试从 ./configs/server.yaml 加载
 	serverConfigPath := "configs/server.yaml"
-	log.Printf("尝试加载服务器配置: %s", serverConfigPath)
+	logging.Logger.Printf("尝试加载服务器配置: %s", serverConfigPath)
 	server, global, err := LoadServerConfig(serverConfigPath)
 	if err != nil {
 		// 如果失败，尝试从 ../configs/server.yaml 加载
 		serverConfigPath = "../configs/server.yaml"
-		log.Printf("尝试从上级目录加载服务器配置: %s", serverConfigPath)
+		logging.Logger.Printf("尝试从上级目录加载服务器配置: %s", serverConfigPath)
 		server, global, err = LoadServerConfig(serverConfigPath)
 		if err != nil {
-			log.Printf("服务器配置文件未找到，使用默认配置")
+			logging.Logger.Printf("服务器配置文件未找到，使用默认配置")
 			server, global = GetDefaultServerConfig()
 		} else {
-			log.Printf("服务器配置加载成功: Server=%+v, Global=%+v", server, global)
+			logging.Logger.Printf("服务器配置加载成功: Server=%+v, Global=%+v", server, global)
 		}
 	} else {
-		log.Printf("服务器配置加载成功: Server=%+v, Global=%+v", server, global)
+		logging.Logger.Printf("服务器配置加载成功: Server=%+v, Global=%+v", server, global)
 	}
 
 	// 创建基础配置
@@ -63,17 +64,17 @@ func LoadConfigWithOpenAPI(apiConfigPath string) (*Config, error) {
 	}
 
 	// 2. 加载API配置
-	log.Printf("开始加载API配置: %s", apiConfigPath)
+	logging.Logger.Printf("开始加载API配置: %s", apiConfigPath)
 	if IsOpenAPISpec(apiConfigPath) {
 		// 如果是OpenAPI规范文件
-		log.Printf("检测到OpenAPI规范文件: %s", apiConfigPath)
+		logging.Logger.Printf("检测到OpenAPI规范文件: %s", apiConfigPath)
 		if openAPILoaderInstance != nil {
 			endpoints, err := LoadOpenAPISpec(apiConfigPath)
 			if err != nil {
 				return nil, fmt.Errorf("加载OpenAPI规范 %s 失败: %w", apiConfigPath, err)
 			}
 			cfg.Endpoints = append(cfg.Endpoints, endpoints...)
-			log.Printf("成功加载 %d 个端点配置", len(endpoints))
+			logging.Logger.Printf("成功加载 %d 个端点配置", len(endpoints))
 		}
 	} else {
 		// 作为普通API配置文件加载
@@ -82,7 +83,7 @@ func LoadConfigWithOpenAPI(apiConfigPath string) (*Config, error) {
 			return nil, fmt.Errorf("加载API配置文件 %s 失败: %w", apiConfigPath, err)
 		}
 		cfg.Endpoints = append(cfg.Endpoints, endpoints...)
-		log.Printf("成功加载 %d 个端点配置", len(endpoints))
+		logging.Logger.Printf("成功加载 %d 个端点配置", len(endpoints))
 	}
 
 	return cfg, nil
