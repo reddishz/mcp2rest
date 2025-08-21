@@ -117,7 +117,7 @@ func (tc *TestClient) SendRequest(method string, params interface{}) (*mcp.MCPRe
 // Initialize 初始化 MCP 连接
 func (tc *TestClient) Initialize() error {
 	initParams := map[string]interface{}{
-		"protocolVersion": "2025-03-26",
+		"protocolVersion": "20241105",
 		"capabilities": map[string]interface{}{
 			"tools": map[string]interface{}{
 				"listChanged": true,

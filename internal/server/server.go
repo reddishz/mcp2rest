@@ -519,7 +519,7 @@ func (s *Server) handleInitialize(request mcp.MCPRequest) ([]byte, error) {
 	
 	// 构建初始化响应
 	initResult := map[string]interface{}{
-		"protocolVersion": "2025-03-26",
+					"protocolVersion": "20241105",
 		"capabilities": map[string]interface{}{
 			"tools": map[string]interface{}{
 				"listChanged": true,

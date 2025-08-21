@@ -46,7 +46,7 @@ export APIKEYAUTH_API_KEY="your_api_key"
 ./bin/mcp2rest-stdio -config configs/bmc_api.yaml
 
 # 测试
-echo '{"jsonrpc":"2.0","id":"test","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | ./bin/mcp2rest-stdio -config configs/bmc_api.yaml
+echo '{"jsonrpc":"2.0","id":"test","method":"initialize","params":{"protocolVersion":"20241105","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | ./bin/mcp2rest-stdio -config configs/bmc_api.yaml
 ```
 
 ### 2. MCP2REST-SSE
@@ -81,7 +81,7 @@ curl -N http://localhost:8088/
 # 发送请求
 curl -X POST http://localhost:8088/ \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"test","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+  -d '{"jsonrpc":"2.0","id":"test","method":"initialize","params":{"protocolVersion":"20241105","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 ```
 
 ### 3. MCP2REST（原始版本）

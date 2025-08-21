@@ -64,7 +64,7 @@ test_normal_exit() {
     
     # 准备输入数据
     cat > "$input_file" << EOF
-{"jsonrpc":"2.0","id":"init_001","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"2.0","id":"init_001","method":"initialize","params":{"protocolVersion":"20241105","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","id":"exit_001","method":"exit","params":{}}
 EOF
     
