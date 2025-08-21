@@ -240,62 +240,78 @@ func (s *Server) startStdioServer() error {
 		logging.Logger.Println("启动读取协程")
 		
 		for {
+			// 首先检查上下文是否已取消
 			select {
 			case <-s.ctx.Done():
 				logging.Logger.Println("读取协程收到关闭信号")
 				return
 			default:
-				// 读取一行（JSON消息）
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					if err == io.EOF {
-						logging.Logger.Println("标准输入已关闭，退出服务器")
-						s.cancel()
-						return
-					}
-					logging.Logger.Printf("从标准输入读取失败: %v", err)
-					// 发送错误响应
-					s.sendErrorResponse(writer, "", -32700, fmt.Sprintf("读取输入失败: %v", err))
-					continue
-				}
-				
-				// 去除换行符和空白字符
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue // 跳过空行
-				}
-				
-				// 创建请求任务
-				task := &requestTask{
-					data: []byte(line),
-				}
-				
-				// 发送到工作协程池
-				select {
-				case requestChan <- task:
-					// 任务已发送
-				case <-s.ctx.Done():
+				// 继续读取
+			}
+			
+			// 使用带超时的读取，避免永久阻塞
+			// 设置一个很短的超时时间，让协程能够快速响应取消信号
+			done := make(chan struct{})
+			var line string
+			var err error
+			
+			go func() {
+				line, err = reader.ReadString('\n')
+				close(done)
+			}()
+			
+			select {
+			case <-done:
+				// 读取完成
+			case <-s.ctx.Done():
+				logging.Logger.Println("读取协程在读取过程中收到关闭信号")
+				return
+			case <-time.After(50 * time.Millisecond):
+				// 读取超时，继续循环检查上下文
+				continue
+			}
+			
+			if err != nil {
+				if err == io.EOF {
+					logging.Logger.Println("标准输入已关闭，退出服务器")
+					s.cancel()
 					return
-				default:
-					// 通道已满，直接处理
-					logging.Logger.Printf("工作协程池已满，直接处理请求")
-					s.processRequest(task)
 				}
+				logging.Logger.Printf("从标准输入读取失败: %v", err)
+				// 发送错误响应
+				s.sendErrorResponse(writer, "", -32700, fmt.Sprintf("读取输入失败: %v", err))
+				continue
+			}
+			
+			// 去除换行符和空白字符
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue // 跳过空行
+			}
+			
+			// 创建请求任务
+			task := &requestTask{
+				data: []byte(line),
+			}
+			
+			// 发送到工作协程池
+			select {
+			case requestChan <- task:
+				// 任务已发送
+			case <-s.ctx.Done():
+				return
+			default:
+				// 通道已满，直接处理
+				logging.Logger.Printf("工作协程池已满，直接处理请求")
+				s.processRequest(task)
 			}
 		}
 	}()
 	
-	// 等待上下文取消或信号
-	select {
-	case <-s.ctx.Done():
-		logging.Logger.Println("标准输入/输出服务器收到停止信号")
-	case <-time.After(1 * time.Second):
-		// 定期检查上下文是否已取消
-		if s.ctx.Err() != nil {
-			logging.Logger.Println("标准输入/输出服务器收到停止信号")
-			break
-		}
-	}
+	// 等待上下文取消
+	logging.Logger.Println("等待服务器停止信号...")
+	<-s.ctx.Done()
+	logging.Logger.Println("标准输入/输出服务器收到停止信号")
 	
 	// 等待所有协程退出
 	logging.Logger.Println("等待所有协程退出...")

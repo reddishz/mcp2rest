@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"os"
@@ -73,24 +72,14 @@ func main() {
 		logging.Logger.Printf("收到信号: %v", sig)
 		// 立即取消上下文
 		srv.Cancel()
+		// 给服务器一点时间优雅关闭
+		logging.Logger.Println("正在关闭服务器...")
+		time.Sleep(100 * time.Millisecond)
 	case <-srv.Done():
 		logging.Logger.Printf("服务器已停止")
 	}
 	
-	// 优雅关闭
-	logging.Logger.Println("正在关闭服务器...")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	
-	if err := srv.StopWithContext(ctx); err != nil {
-		logging.Logger.Printf("服务器关闭失败: %v", err)
-		// 强制退出进程，防止进程泄漏
-		logging.Logger.Println("强制退出进程")
-		os.Exit(1)
-	}
-	
-	logging.Logger.Println("服务器已关闭")
-	
-	// 确保进程退出
+	// 强制退出进程，确保不会有残留
+	logging.Logger.Println("强制退出进程")
 	os.Exit(0)
 }
