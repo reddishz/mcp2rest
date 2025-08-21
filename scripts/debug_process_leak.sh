@@ -44,11 +44,16 @@ show_processes() {
 
 # 监控日志文件
 monitor_logs() {
-    local log_file=$(ls -t logs/ | head -1)
-    if [ -n "$log_file" ]; then
-        echo "最新日志文件: logs/$log_file"
-        echo "最后 20 行日志:"
-        tail -20 "logs/$log_file"
+    local log_files=$(ls logs/server_pid_*.log 2>/dev/null | tail -3)
+    if [ -n "$log_files" ]; then
+        echo "最近的日志文件:"
+        echo "$log_files" | while read log_file; do
+            if [ -n "$log_file" ]; then
+                echo "=== $log_file ==="
+                tail -10 "$log_file"
+                echo ""
+            fi
+        done
     else
         echo "没有找到日志文件"
     fi

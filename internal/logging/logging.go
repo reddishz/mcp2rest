@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 var Logger *log.Logger
@@ -37,9 +36,11 @@ func InitLogger() error {
 	}
 	_ = os.Remove(filepath.Join(logDir, "test_write.log"))
 
-	// 生成带时间戳的日志文件名
-	timestamp := time.Now().Format("20060102_150405")
-	logFile := filepath.Join(logDir, "server_" + timestamp + ".log")
+	// 获取当前进程ID
+	pid := os.Getpid()
+	
+	// 生成按进程ID命名的日志文件名
+	logFile := filepath.Join(logDir, fmt.Sprintf("server_pid_%d.log", pid))
 
 	// 强制创建日志文件
 	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
