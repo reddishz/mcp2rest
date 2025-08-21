@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/itchyny/timefmt-go v0.1.5 // indirect
 	golang.org/x/net v0.17.0 // indirect
 )

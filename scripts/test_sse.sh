@@ -26,13 +26,29 @@ else
 fi
 
 echo ""
-echo "===== 测试 1: 建立 SSE 连接 ====="
+echo "===== 测试 1: 建立 SSE 连接并获取会话端点 ====="
 echo "发送 GET 请求建立 SSE 连接..."
-curl -N -H "Accept: text/event-stream" http://localhost:8088/sse &
+
+# 启动 SSE 连接并捕获端点信息
+SSE_OUTPUT=$(curl -N -H "Accept: text/event-stream" http://localhost:8088/sse 2>&1 | head -n 10) &
 SSE_PID=$!
 
 # 等待连接建立
-sleep 2
+sleep 3
+
+# 从输出中提取会话端点
+SESSION_ENDPOINT=$(echo "$SSE_OUTPUT" | grep "event: endpoint" | sed 's/event: endpoint//' | tr -d '\n\r ')
+if [ -z "$SESSION_ENDPOINT" ]; then
+    echo "❌ 无法获取会话端点"
+    kill $SSE_PID 2>/dev/null
+    exit 1
+fi
+
+echo "✅ 获取到会话端点: $SESSION_ENDPOINT"
+
+# 构建完整的消息端点 URL
+MESSAGE_URL="http://localhost:8088$SESSION_ENDPOINT"
+echo "消息端点: $MESSAGE_URL"
 
 echo ""
 echo "===== 测试 2: 发送 MCP 初始化请求 ====="
@@ -40,10 +56,10 @@ echo "发送 POST 请求进行 MCP 初始化..."
 
 INIT_REQUEST='{
   "jsonrpc": "2.0",
-  "id": "test_init_1",
+  "id": 0,
   "method": "initialize",
   "params": {
-    "protocolVersion": "20241105",
+    "protocolVersion": "2024-11-05",
     "capabilities": {
       "tools": {
         "listChanged": true
@@ -71,7 +87,7 @@ echo "$INIT_REQUEST" | jq '.'
 
 echo ""
 echo "发送请求..."
-RESPONSE=$(curl -s -X POST http://localhost:8088/api \
+RESPONSE=$(curl -s -X POST "$MESSAGE_URL" \
   -H "Content-Type: application/json" \
   -d "$INIT_REQUEST")
 
@@ -79,20 +95,36 @@ echo "响应内容:"
 echo "$RESPONSE" | jq '.'
 
 echo ""
-echo "===== 测试 3: 发送工具列表请求 ====="
+echo "===== 测试 3: 发送初始化完成通知 ====="
+INITIALIZED_REQUEST='{
+  "jsonrpc": "2.0",
+  "method": "notifications/initialized",
+  "params": {}
+}'
+
+echo "发送初始化完成通知..."
+INITIALIZED_RESPONSE=$(curl -s -X POST "$MESSAGE_URL" \
+  -H "Content-Type: application/json" \
+  -d "$INITIALIZED_REQUEST")
+
+echo "响应内容:"
+echo "$INITIALIZED_RESPONSE" | jq '.'
+
+echo ""
+echo "===== 测试 4: 发送工具列表请求 ====="
 TOOLS_REQUEST='{
   "jsonrpc": "2.0",
-  "id": "test_tools_1",
+  "id": 1,
   "method": "tools/list",
   "params": {}
 }'
 
 echo "发送工具列表请求..."
-TOOLS_RESPONSE=$(curl -s -X POST http://localhost:8088/api \
+TOOLS_RESPONSE=$(curl -s -X POST "$MESSAGE_URL" \
   -H "Content-Type: application/json" \
   -d "$TOOLS_REQUEST")
 
-echo "工具列表响应:"
+echo "响应内容:"
 echo "$TOOLS_RESPONSE" | jq '.'
 
 echo ""

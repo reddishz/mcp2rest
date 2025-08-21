@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mcp2rest/internal/config"
 	"github.com/mcp2rest/internal/debug"
 	"github.com/mcp2rest/internal/handler"
@@ -31,6 +33,9 @@ type Server struct {
 	// SSE 连接管理
 	sseConnections map[string]*SSEConnection
 	sseMutex       sync.RWMutex
+	// 会话管理
+	sessions map[string]*MCPSession
+	sessionMutex sync.RWMutex
 }
 
 // SSEConnection SSE连接
@@ -41,6 +46,16 @@ type SSEConnection struct {
 	Context    context.Context
 	Cancel     context.CancelFunc
 	RemoteAddr string
+	SessionID  string
+}
+
+// MCPSession MCP会话
+type MCPSession struct {
+	ID           string
+	ClientID     string
+	Endpoint     string
+	CreatedAt    time.Time
+	LastActivity time.Time
 }
 
 // NewServer 创建新的服务器实例
@@ -62,6 +77,7 @@ func NewServer(cfg *config.Config, spec *config.OpenAPISpec) (*Server, error) {
 		cancel:         cancel,
 		done:           make(chan struct{}),
 		sseConnections: make(map[string]*SSEConnection),
+		sessions:       make(map[string]*MCPSession),
 	}, nil
 }
 
@@ -147,9 +163,9 @@ func getServerName(mode string) string {
 func (s *Server) startSSEServer() error {
 	mux := http.NewServeMux()
 
-	// 分离端点：SSE 连接和消息处理
-	mux.HandleFunc("/sse", s.handleSSEConnection) // GET: 建立 SSE 连接
-	mux.HandleFunc("/api", s.handleSSEMessage)    // POST: 处理 MCP 消息
+	// 按照 MCP SSE 规范设置端点
+	mux.HandleFunc("/sse", s.handleSSEConnection)           // GET: 建立 SSE 连接
+	mux.HandleFunc("/messages/", s.handleMCPMessages)       // POST: 处理 MCP 消息
 
 	addr := fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port)
 	s.httpServer = &http.Server{
@@ -159,7 +175,7 @@ func (s *Server) startSSEServer() error {
 
 	logging.Logger.Printf("SSE服务器启动在 %s", addr)
 	logging.Logger.Printf("SSE连接端点: %s/sse", addr)
-	logging.Logger.Printf("消息处理端点: %s/api", addr)
+	logging.Logger.Printf("消息处理端点: %s/messages/", addr)
 	return s.httpServer.ListenAndServe()
 }
 
@@ -187,7 +203,10 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
 
 	// 创建客户端连接标识
 	clientID := fmt.Sprintf("%s-%d", r.RemoteAddr, time.Now().UnixNano())
-
+	
+	// 创建会话ID
+	sessionID := s.generateSessionID()
+	
 	// 创建连接上下文
 	connCtx, connCancel := context.WithCancel(r.Context())
 
@@ -199,14 +218,28 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
 		Context:    connCtx,
 		Cancel:     connCancel,
 		RemoteAddr: r.RemoteAddr,
+		SessionID:  sessionID,
 	}
 
-	// 注册连接
+	// 创建会话
+	session := &MCPSession{
+		ID:           sessionID,
+		ClientID:     clientID,
+		Endpoint:     fmt.Sprintf("/messages/?session_id=%s", sessionID),
+		CreatedAt:    time.Now(),
+		LastActivity: time.Now(),
+	}
+
+	// 注册连接和会话
 	s.sseMutex.Lock()
 	s.sseConnections[clientID] = conn
 	s.sseMutex.Unlock()
 
-	logging.Logger.Printf("SSE客户端连接: %s", clientID)
+	s.sessionMutex.Lock()
+	s.sessions[sessionID] = session
+	s.sessionMutex.Unlock()
+
+	logging.Logger.Printf("SSE客户端连接: %s, 会话: %s", clientID, sessionID)
 
 	// 记录调试信息
 	debug.LogInfo("SSE连接建立", map[string]interface{}{
@@ -214,15 +247,16 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
 		"method":      r.Method,
 		"url":         r.URL.String(),
 		"client_id":   clientID,
+		"session_id":  sessionID,
 		"headers":     r.Header,
 	})
 
-	// 发送连接建立消息
-	fmt.Fprintf(w, "data: {\"type\":\"connected\",\"message\":\"SSE连接已建立\",\"clientId\":\"%s\"}\n\n", clientID)
+	// 按照 MCP 规范发送专用消息端点
+	endpointMessage := fmt.Sprintf("event: endpoint\ndata: %s\n\n", session.Endpoint)
+	fmt.Fprint(w, endpointMessage)
 	flusher.Flush()
 
-	// 保持连接活跃 - 在 HTTP 处理函数中处理，不立即返回
-	// 这样可以确保 HTTP 连接保持开放
+	// 保持连接活跃
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -237,8 +271,9 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
 			// 每30秒发送一次心跳，保持连接活跃
 			s.sseMutex.RLock()
 			if currentConn, exists := s.sseConnections[clientID]; exists {
-				fmt.Fprintf(currentConn.Writer, "data: {\"type\":\"heartbeat\",\"timestamp\":\"%s\",\"clientId\":\"%s\"}\n\n",
-					time.Now().Format(time.RFC3339), clientID)
+				heartbeatMessage := fmt.Sprintf("event: heartbeat\ndata: {\"timestamp\":\"%s\",\"session_id\":\"%s\"}\n\n",
+					time.Now().Format(time.RFC3339), sessionID)
+				fmt.Fprint(currentConn.Writer, heartbeatMessage)
 				currentConn.Flusher.Flush()
 			}
 			s.sseMutex.RUnlock()
@@ -246,10 +281,13 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// generateSessionID 生成会话ID
+func (s *Server) generateSessionID() string {
+	return fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprintf("%d-%s", time.Now().UnixNano(), uuid.New().String()))))
+}
 
-
-// handleSSEMessage 处理SSE消息 (POST /api)
-func (s *Server) handleSSEMessage(w http.ResponseWriter, r *http.Request) {
+// handleMCPMessages 处理MCP消息 (POST /messages/?session_id=xxx)
+func (s *Server) handleMCPMessages(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -267,10 +305,32 @@ func (s *Server) handleSSEMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 解析会话ID
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		http.Error(w, "Missing session_id", http.StatusBadRequest)
+		return
+	}
+
+	// 验证会话
+	s.sessionMutex.RLock()
+	session, exists := s.sessions[sessionID]
+	s.sessionMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Invalid session_id", http.StatusBadRequest)
+		return
+	}
+
+	// 更新会话活动时间
+	s.sessionMutex.Lock()
+	session.LastActivity = time.Now()
+	s.sessionMutex.Unlock()
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		logging.Logger.Printf("读取请求体失败: %v", err)
-		debug.LogError("读取SSE请求体失败", err)
+		debug.LogError("读取MCP请求体失败", err)
 		http.Error(w, "读取请求体失败", http.StatusBadRequest)
 		return
 	}
@@ -279,6 +339,7 @@ func (s *Server) handleSSEMessage(w http.ResponseWriter, r *http.Request) {
 	debug.LogRequest("POST", r.URL.Path, map[string]string{
 		"Content-Type": r.Header.Get("Content-Type"),
 		"User-Agent":   r.Header.Get("User-Agent"),
+		"Session-ID":   sessionID,
 	}, body)
 
 	// 处理MCP请求
@@ -297,9 +358,40 @@ func (s *Server) handleSSEMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	debug.LogResponse(200, responseHeaders, response)
 
-	// 发送响应
-	w.WriteHeader(http.StatusOK)
-	w.Write(response)
+	// 按照 MCP 规范，返回 "Accepted" 状态码
+	w.WriteHeader(http.StatusAccepted)
+	w.Write([]byte(`{"status":"Accepted"}`))
+
+	// 通过 SSE 连接推送实际响应
+	s.pushMessageToSession(sessionID, response)
+}
+
+// pushMessageToSession 向指定会话推送消息
+func (s *Server) pushMessageToSession(sessionID string, message []byte) {
+	s.sessionMutex.RLock()
+	session, exists := s.sessions[sessionID]
+	s.sessionMutex.RUnlock()
+
+	if !exists {
+		logging.Logger.Printf("会话不存在: %s", sessionID)
+		return
+	}
+
+	s.sseMutex.RLock()
+	conn, exists := s.sseConnections[session.ClientID]
+	s.sseMutex.RUnlock()
+
+	if !exists {
+		logging.Logger.Printf("连接不存在: %s", session.ClientID)
+		return
+	}
+
+	// 按照 MCP 规范发送消息
+	messageEvent := fmt.Sprintf("event: message\ndata: %s\n\n", string(message))
+	fmt.Fprint(conn.Writer, messageEvent)
+	conn.Flusher.Flush()
+
+	logging.Logger.Printf("向会话 %s 推送消息", sessionID)
 }
 
 // removeSSEConnection 移除SSE连接
@@ -310,26 +402,19 @@ func (s *Server) removeSSEConnection(clientID string) {
 	if conn, exists := s.sseConnections[clientID]; exists {
 		conn.Cancel()
 		delete(s.sseConnections, clientID)
-		logging.Logger.Printf("SSE连接已移除: %s", clientID)
-	}
-}
-
-// broadcastToSSE 向所有SSE连接广播消息
-func (s *Server) broadcastToSSE(message []byte) {
-	s.sseMutex.RLock()
-	defer s.sseMutex.RUnlock()
-
-	for clientID, conn := range s.sseConnections {
-		select {
-		case <-conn.Context.Done():
-			// 连接已关闭，跳过
-			continue
-		default:
-			// 发送消息
-			fmt.Fprintf(conn.Writer, "data: %s\n\n", string(message))
-			conn.Flusher.Flush()
-			logging.Logger.Printf("向SSE客户端 %s 发送消息", clientID)
+		
+		// 同时清理会话
+		s.sessionMutex.Lock()
+		for sessionID, session := range s.sessions {
+			if session.ClientID == clientID {
+				delete(s.sessions, sessionID)
+				logging.Logger.Printf("会话已移除: %s", sessionID)
+				break
+			}
 		}
+		s.sessionMutex.Unlock()
+		
+		logging.Logger.Printf("SSE连接已移除: %s", clientID)
 	}
 }
 
