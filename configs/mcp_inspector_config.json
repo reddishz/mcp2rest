@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "mcp2rest-sse": {
+      "command": "curl",
+      "args": [
+        "-X", "POST",
+        "-H", "Content-Type: application/json",
+        "-d", "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"20241105\",\"capabilities\":{},\"clientInfo\":{\"name\":\"mcp-inspector\",\"version\":\"1.0\"}}}",
+        "http://localhost:8088/"
+      ],
+      "env": {
+        "APIKEYAUTH_API_KEY": "ded45a001ffb9c47b1e29fcbdd6bcec6"
+      }
+    }
+  }
+}

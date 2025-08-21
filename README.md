@@ -169,6 +169,8 @@ export APIKEYAUTH_API_KEY="your_actual_bmc_api_key_here"
 3. **分离版本**: 创建了专用的 stdio 和 sse 版本
 4. **进程管理优化**: 改进了进程生命周期管理
 5. **日志优化**: 按进程 ID 命名日志文件
+6. **自动环境变量加载**: 支持自动加载 `.env` 文件
+7. **MCP Inspector 支持**: 提供完整的 MCP Inspector 连接指南
 
 ## 技术栈
 
@@ -177,3 +179,33 @@ export APIKEYAUTH_API_KEY="your_actual_bmc_api_key_here"
 - **JSON-RPC 2.0**: MCP 协议基础
 - **SSE**: Server-Sent Events 协议
 - **YAML**: 配置文件格式
+
+## MCP Inspector 连接
+
+### 推荐方式：使用 stdio 版本
+
+MCP Inspector 最适合与 stdio 版本连接：
+
+1. **在 MCP Inspector 中配置**：
+   - 连接类型：`stdio`
+   - 命令：`./bin/mcp2rest-stdio`
+   - 参数：`-config configs/bmc_api.yaml`
+   - 工作目录：项目根目录
+
+2. **确保环境变量已设置**：
+   ```bash
+   # 使用 .env 文件（自动加载）
+   cp configs/.env.example configs/.env
+   # 编辑 configs/.env，设置 APIKEYAUTH_API_KEY
+   ```
+
+### 备选方式：使用 SSE 版本
+
+如果必须使用 SSE 版本，请参考 `docs/mcp_inspector_guide.md` 中的详细说明。
+
+### 故障排除
+
+如果遇到 "The argument 'file' cannot be empty" 错误，请：
+1. 确保使用 stdio 连接类型
+2. 检查命令和参数是否正确
+3. 参考 `docs/mcp_inspector_guide.md` 获取详细解决方案
