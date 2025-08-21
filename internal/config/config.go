@@ -84,6 +84,32 @@ type TransformConfig struct {
 	Template   string `yaml:"template"`   // 模板字符串
 }
 
+// resolveConfigPath 解析配置文件路径，支持从可执行文件目录或上一级目录查找
+func resolveConfigPath(exeDir, configPath string) string {
+	// 如果已经是绝对路径，直接返回
+	if filepath.IsAbs(configPath) {
+		return configPath
+	}
+
+	// 优先检查可执行文件目录下的路径
+	joinedPath := filepath.Join(exeDir, configPath)
+	if _, err := os.Stat(joinedPath); err == nil {
+		return joinedPath
+	}
+
+	// 如果文件不存在且可执行文件位于 bin 目录，则尝试上一级目录
+	if filepath.Base(exeDir) == "bin" {
+		parentDir := filepath.Dir(exeDir)
+		joinedPath = filepath.Join(parentDir, configPath)
+		if _, err := os.Stat(joinedPath); err == nil {
+			return joinedPath
+		}
+	}
+
+	// 如果仍未找到，返回原始路径（后续逻辑会处理文件不存在的情况）
+	return filepath.Join(exeDir, configPath)
+}
+
 // GetDefaultServerConfig 返回默认的服务器配置
 func GetDefaultServerConfig() (*ServerConfig, *GlobalConfig) {
 	server := &ServerConfig{
@@ -101,7 +127,18 @@ func GetDefaultServerConfig() (*ServerConfig, *GlobalConfig) {
 
 // TryLoadServerConfig 尝试从configs/server.yaml加载服务器配置，如果不存在则使用默认配置
 func TryLoadServerConfig() (*ServerConfig, *GlobalConfig, error) {
-	serverConfigPath := "configs/server.yaml"
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil, nil, fmt.Errorf("无法获取可执行文件路径: %v", err)
+	}
+	exeDir := filepath.Dir(exePath)
+	serverConfigPath := resolveConfigPath(exeDir, "configs/server.yaml")
+
+	// 如果通过 -f 参数指定了配置文件路径，也应用相同的解析逻辑
+	var customConfigPath string
+	if customConfigPath != "" {
+		customConfigPath = resolveConfigPath(exeDir, customConfigPath)
+	}
 	
 	// 检查文件是否存在
 	if _, err := os.Stat(serverConfigPath); os.IsNotExist(err) {
