@@ -10,13 +10,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"context"
 
-	"github.com/gorilla/websocket"
 	"github.com/mcp2rest/internal/config"
 	"github.com/mcp2rest/internal/handler"
 	"github.com/mcp2rest/pkg/mcp"
 	"github.com/mcp2rest/internal/logging"
-	"context"
 )
 
 // Server MCP服务器
@@ -25,9 +24,6 @@ type Server struct {
 	openAPISpec *config.OpenAPISpec
 	handler     *handler.RequestHandler
 	httpServer  *http.Server
-	connections map[*websocket.Conn]bool
-	mu          sync.Mutex
-	upgrader    websocket.Upgrader
 	ctx         context.Context
 	cancel      context.CancelFunc
 	done        chan struct{}
@@ -48,27 +44,21 @@ func NewServer(cfg *config.Config, spec *config.OpenAPISpec) (*Server, error) {
 		config:      cfg,
 		openAPISpec: spec,
 		handler:     reqHandler,
-		connections: make(map[*websocket.Conn]bool),
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return true // 允许所有来源的WebSocket连接
-			},
-		},
-		ctx:    ctx,
-		cancel: cancel,
-		done:   make(chan struct{}),
+		ctx:         ctx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
 	}, nil
 }
 
 // Start 启动服务器
 func (s *Server) Start() error {
 	switch s.config.Server.Mode {
-	case "websocket":
-		return s.startWebSocketServer()
+	case "sse":
+		return s.startSSEServer()
 	case "stdio":
 		return s.startStdioServer()
 	default:
-		return fmt.Errorf("不支持的服务器模式: %s", s.config.Server.Mode)
+		return fmt.Errorf("不支持的服务器模式: %s (支持: stdio, sse)", s.config.Server.Mode)
 	}
 }
 
@@ -77,13 +67,6 @@ func (s *Server) Stop() error {
 	logging.Logger.Println("正在停止服务器...")
 	s.cancel()
 	
-	// 关闭所有WebSocket连接
-	s.mu.Lock()
-	for conn := range s.connections {
-		conn.Close()
-	}
-	s.mu.Unlock()
-
 	// 关闭HTTP服务器
 	if s.httpServer != nil {
 		return s.httpServer.Shutdown(context.Background())
@@ -133,10 +116,22 @@ func (s *Server) Cancel() {
 	s.cancel()
 }
 
-// startWebSocketServer 启动WebSocket服务器
-func (s *Server) startWebSocketServer() error {
+// getServerName 根据模式获取服务器名称
+func getServerName(mode string) string {
+	switch mode {
+	case "stdio":
+		return "MCP2REST-STDIO"
+	case "sse":
+		return "MCP2REST-SSE"
+	default:
+		return "MCP2REST"
+	}
+}
+
+// startSSEServer 启动SSE服务器
+func (s *Server) startSSEServer() error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleWebSocket)
+	mux.HandleFunc("/", s.handleSSE)
 
 	addr := fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port)
 	s.httpServer = &http.Server{
@@ -144,56 +139,72 @@ func (s *Server) startWebSocketServer() error {
 		Handler: mux,
 	}
 
-	logging.Logger.Printf("WebSocket服务器启动在 %s", addr)
+	logging.Logger.Printf("SSE服务器启动在 %s", addr)
 	return s.httpServer.ListenAndServe()
 }
 
-// handleWebSocket 处理WebSocket连接
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := s.upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		logging.Logger.Printf("升级WebSocket连接失败: %v", err)
+// handleSSE 处理SSE连接
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	// 设置SSE头
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
+
+	// 创建SSE写入器
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
 		return
 	}
-	defer conn.Close()
 
-	// 添加连接到映射
-	s.mu.Lock()
-	s.connections[conn] = true
-	s.mu.Unlock()
+	logging.Logger.Printf("新的SSE连接: %s", r.RemoteAddr)
 
-	// 在函数返回时删除连接
-	defer func() {
-		s.mu.Lock()
-		delete(s.connections, conn)
-		s.mu.Unlock()
-	}()
-
-	logging.Logger.Printf("新的WebSocket连接: %s", conn.RemoteAddr())
-
-	for {
-		// 读取消息
-		_, message, err := conn.ReadMessage()
+	// 处理POST请求（客户端发送消息）
+	if r.Method == "POST" {
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				logging.Logger.Printf("WebSocket读取错误: %v", err)
-			}
-			break
+			logging.Logger.Printf("读取请求体失败: %v", err)
+			http.Error(w, "读取请求体失败", http.StatusBadRequest)
+			return
 		}
 
 		// 处理MCP请求
-		response, err := s.handleMCPRequest(message)
+		response, err := s.handleMCPRequest(body)
 		if err != nil {
 			logging.Logger.Printf("处理MCP请求失败: %v", err)
-			continue
+			http.Error(w, "处理请求失败", http.StatusInternalServerError)
+			return
 		}
 
-		// 发送响应
-		if err := conn.WriteMessage(websocket.TextMessage, response); err != nil {
-			logging.Logger.Printf("WebSocket写入错误: %v", err)
-			break
+		// 发送SSE响应
+		fmt.Fprintf(w, "data: %s\n\n", string(response))
+		flusher.Flush()
+		return
+	}
+
+	// 处理GET请求（建立SSE连接）
+	if r.Method == "GET" {
+		// 发送连接建立消息
+		fmt.Fprintf(w, "data: {\"type\":\"connected\",\"message\":\"SSE连接已建立\"}\n\n")
+		flusher.Flush()
+
+		// 保持连接活跃
+		for {
+			select {
+			case <-s.ctx.Done():
+				logging.Logger.Printf("SSE连接关闭: %s", r.RemoteAddr)
+				return
+			case <-time.After(30 * time.Second):
+				// 发送心跳
+				fmt.Fprintf(w, "data: {\"type\":\"heartbeat\",\"timestamp\":\"%s\"}\n\n", time.Now().Format(time.RFC3339))
+				flusher.Flush()
+			}
 		}
 	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 // startStdioServer 启动标准输入/输出服务器
@@ -524,10 +535,10 @@ func (s *Server) handleInitialize(request mcp.MCPRequest) ([]byte, error) {
 				"request": true,
 			},
 		},
-		"serverInfo": map[string]interface{}{
-			"name":    "MCP2REST",
-			"version": "1.0.0",
-		},
+					"serverInfo": map[string]interface{}{
+				"name":    getServerName(s.config.Server.Mode),
+				"version": "1.0.0",
+			},
 	}
 	
 	response, err := mcp.NewSuccessResponse(request.GetIDString(), initResult)

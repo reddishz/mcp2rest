@@ -21,7 +21,7 @@ type Config struct {
 type ServerConfig struct {
 	Port int    `yaml:"port"`
 	Host string `yaml:"host"`
-	Mode string `yaml:"mode"` // "websocket" 或 "stdio"
+	Mode string `yaml:"mode"` // "stdio" 或 "sse"
 }
 
 // GlobalConfig 表示全局设置
@@ -162,7 +162,7 @@ func GetDefaultServerConfig() (*ServerConfig, *GlobalConfig) {
 	server := &ServerConfig{
 		Port: 8080,
 		Host: "0.0.0.0",
-		Mode: "websocket",
+		Mode: "sse",
 	}
 	
 	global := &GlobalConfig{
@@ -218,7 +218,7 @@ func TryLoadServerConfig() (*ServerConfig, *GlobalConfig, error) {
 		cfg.Server.Host = "0.0.0.0"
 	}
 	if cfg.Server.Mode == "" {
-		cfg.Server.Mode = "websocket"
+		cfg.Server.Mode = "sse"
 	}
 	if cfg.Global.Timeout == 0 {
 		cfg.Global.Timeout = 30 * time.Second
@@ -265,7 +265,7 @@ func LoadServerConfig(filePath string) (*ServerConfig, *GlobalConfig, error) {
 		cfg.Server.Host = "0.0.0.0"
 	}
 	if cfg.Server.Mode == "" {
-		cfg.Server.Mode = "websocket"
+		cfg.Server.Mode = "sse"
 	}
 	if cfg.Global.Timeout == 0 {
 		cfg.Global.Timeout = 30 * time.Second

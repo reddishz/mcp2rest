@@ -1,7 +1,7 @@
 server:
   port: 8088
   host: "0.0.0.0"
-  mode: "sse"  # 可选值: "stdio" 或 "sse"
+  mode: "sse"  # SSE 模式
 
 global:
   timeout: 60s
