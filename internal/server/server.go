@@ -157,7 +157,7 @@ func (s *Server) startStdioServer() error {
 	
 	// 创建带缓冲的读取器和写入器
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024) // 64KB 缓冲区
-	writer := bufio.NewWriterSize(os.Stdout, 64*1024) // 64KB 缓冲区
+	writer := bufio.NewWriterSize(os.Stdout, 256*1024) // 256KB 缓冲区，增加缓冲区大小
 	defer writer.Flush()
 	
 	// 创建请求通道，用于并发处理
@@ -269,26 +269,25 @@ func (s *Server) processRequest(task *requestTask) {
 	select {
 	case <-ctx.Done():
 		logging.Logger.Printf("请求处理超时")
-		// 为超时响应创建独立的 writer
-		writer := bufio.NewWriter(os.Stdout)
-		s.sendErrorResponse(writer, "", -32001, "Request timed out")
-		writer.Flush()
+		// 直接使用 os.Stdout
+		errResp := mcp.NewErrorResponse("", -32001, "Request timed out")
+		response, _ := json.Marshal(errResp)
+		os.Stdout.Write(response)
+		os.Stdout.Write([]byte("\n"))
 	case <-done:
 		if err != nil {
 			logging.Logger.Printf("处理MCP请求失败: %v", err)
-			// 为错误响应创建独立的 writer
-			writer := bufio.NewWriter(os.Stdout)
-			s.sendErrorResponse(writer, "", -32603, fmt.Sprintf("处理请求失败: %v", err))
-			writer.Flush()
+			// 直接使用 os.Stdout
+			errResp := mcp.NewErrorResponse("", -32603, fmt.Sprintf("处理请求失败: %v", err))
+			response, _ := json.Marshal(errResp)
+			os.Stdout.Write(response)
+			os.Stdout.Write([]byte("\n"))
 			return
 		}
 		
-		// 为响应创建独立的 writer
-		writer := bufio.NewWriter(os.Stdout)
-		if err := s.writeResponse(writer, response); err != nil {
-			logging.Logger.Printf("写入标准输出失败: %v", err)
-		}
-		writer.Flush()
+		// 直接使用 os.Stdout
+		os.Stdout.Write(response)
+		os.Stdout.Write([]byte("\n"))
 	}
 }
 
@@ -299,12 +298,17 @@ func (s *Server) writeResponse(writer *bufio.Writer, response []byte) error {
 		return fmt.Errorf("写入响应数据失败: %w", err)
 	}
 	
+	// 立即刷新，确保数据被写入
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("刷新缓冲区失败: %w", err)
+	}
+	
 	// 写入换行符
 	if err := writer.WriteByte('\n'); err != nil {
 		return fmt.Errorf("写入换行符失败: %w", err)
 	}
 	
-	// 刷新缓冲区
+	// 再次刷新，确保换行符被写入
 	if err := writer.Flush(); err != nil {
 		return fmt.Errorf("刷新缓冲区失败: %w", err)
 	}
