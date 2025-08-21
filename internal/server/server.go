@@ -553,11 +553,14 @@ func (s *Server) handleExit(request mcp.MCPRequest) ([]byte, error) {
 		return nil, err
 	}
 	
-	// 异步关闭服务器
+	// 立即关闭服务器
+	logging.Logger.Printf("执行退出操作")
 	go func() {
-		time.Sleep(100 * time.Millisecond) // 给响应发送一点时间
-		logging.Logger.Printf("执行退出操作")
+		// 给响应发送一点时间
+		time.Sleep(50 * time.Millisecond)
 		s.Stop()
+		// 强制退出进程
+		os.Exit(0)
 	}()
 	
 	return responseBytes, nil

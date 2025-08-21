@@ -240,9 +240,26 @@ func (tc *TestClient) Close() error {
 		return nil
 	}
 
-	// 先尝试优雅关闭
+	// 先发送 exit 命令给服务器
+	fmt.Println("发送 exit 命令给服务器...")
+	exitRequest := mcp.MCPRequest{
+		JSONRPC: "2.0",
+		ID:      []byte(`"exit"`),
+		Method:  "exit",
+		Params:  []byte("{}"),
+	}
+
+	exitBytes, err := json.Marshal(exitRequest)
+	if err == nil {
+		exitStr := string(exitBytes) + "\n"
+		tc.stdin.Write([]byte(exitStr))
+		// 给服务器一点时间处理 exit 命令
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// 然后尝试优雅关闭
 	if err := tc.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		return err
+		fmt.Printf("发送 SIGTERM 失败: %v\n", err)
 	}
 
 	// 等待进程退出
@@ -254,8 +271,10 @@ func (tc *TestClient) Close() error {
 
 	select {
 	case err := <-done:
+		fmt.Printf("进程已退出: %v\n", err)
 		return err
 	case <-time.After(5 * time.Second):
+		fmt.Println("进程退出超时，强制终止...")
 		// 超时后强制终止
 		return tc.cmd.Process.Kill()
 	}
