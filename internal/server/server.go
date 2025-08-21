@@ -1,20 +1,22 @@
 package server
 
 import (
-	"github.com/mcp2rest/internal/logging"
-	
-	"context"
+	"bufio"
 	"encoding/json"
 	"fmt"
-	
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/mcp2rest/internal/config"
 	"github.com/mcp2rest/internal/handler"
 	"github.com/mcp2rest/pkg/mcp"
+	"github.com/mcp2rest/internal/logging"
+	"context"
 )
 
 // Server 表示MCP2REST服务器
@@ -153,75 +155,239 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func (s *Server) startStdioServer() error {
 	logging.Logger.Println("启动标准输入/输出服务器")
 	
+	// 创建带缓冲的读取器和写入器
+	reader := bufio.NewReaderSize(os.Stdin, 64*1024) // 64KB 缓冲区
+	writer := bufio.NewWriterSize(os.Stdout, 64*1024) // 64KB 缓冲区
+	defer writer.Flush()
+	
+	// 创建请求通道，用于并发处理
+	requestChan := make(chan *requestTask, 100) // 缓冲通道
+	defer close(requestChan)
+	
+	// 启动工作协程池
+	workerCount := 4 // 可以根据需要调整
+	for i := 0; i < workerCount; i++ {
+		go s.stdioWorker(requestChan, writer)
+	}
+	
+	// 启动读取协程
 	go func() {
-		var buffer [4096]byte
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Logger.Printf("标准输入/输出服务器发生panic: %v", r)
+			}
+		}()
+		
 		for {
 			select {
 			case <-s.ctx.Done():
+				logging.Logger.Println("标准输入/输出服务器收到关闭信号")
 				return
 			default:
-				// 从标准输入读取
-				n, err := os.Stdin.Read(buffer[:])
+				// 读取一行（JSON消息）
+				line, err := reader.ReadString('\n')
 				if err != nil {
+					if err == io.EOF {
+						logging.Logger.Println("标准输入已关闭")
+						return
+					}
 					logging.Logger.Printf("从标准输入读取失败: %v", err)
+					// 发送错误响应
+					s.sendErrorResponse(writer, "", -32700, fmt.Sprintf("读取输入失败: %v", err))
 					continue
 				}
-
-				// 处理MCP请求
-				response, err := s.handleMCPRequest(buffer[:n])
-				if err != nil {
-					logging.Logger.Printf("处理MCP请求失败: %v", err)
-					continue
+				
+				// 去除换行符和空白字符
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue // 跳过空行
 				}
-
-				// 写入标准输出
-				if _, err := os.Stdout.Write(response); err != nil {
-					logging.Logger.Printf("写入标准输出失败: %v", err)
+				
+				// 创建请求任务
+				task := &requestTask{
+					data:   []byte(line),
+					writer: writer,
 				}
-				fmt.Println() // 添加换行符
+				
+				// 发送到工作协程池
+				select {
+				case requestChan <- task:
+					// 任务已发送
+				case <-s.ctx.Done():
+					return
+				default:
+					// 通道已满，直接处理
+					logging.Logger.Printf("工作协程池已满，直接处理请求")
+					s.processRequest(task)
+				}
 			}
 		}
 	}()
-
+	
 	// 等待上下文取消
 	<-s.ctx.Done()
+	logging.Logger.Println("标准输入/输出服务器已停止")
 	return nil
+}
+
+// requestTask 请求任务
+type requestTask struct {
+	data   []byte
+	writer *bufio.Writer
+}
+
+// stdioWorker 标准输入/输出工作协程
+func (s *Server) stdioWorker(requestChan <-chan *requestTask, writer *bufio.Writer) {
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case task, ok := <-requestChan:
+			if !ok {
+				return
+			}
+			s.processRequest(task)
+		}
+	}
+}
+
+// processRequest 处理单个请求
+func (s *Server) processRequest(task *requestTask) {
+	// 设置请求超时
+	ctx, cancel := context.WithTimeout(s.ctx, s.config.Global.Timeout)
+	defer cancel()
+	
+	// 创建带超时的处理通道
+	done := make(chan struct{})
+	var response []byte
+	var err error
+	
+	go func() {
+		response, err = s.handleMCPRequest(task.data)
+		close(done)
+	}()
+	
+	// 等待处理完成或超时
+	select {
+	case <-ctx.Done():
+		logging.Logger.Printf("请求处理超时")
+		s.sendErrorResponse(task.writer, "", -32603, "请求处理超时")
+	case <-done:
+		if err != nil {
+			logging.Logger.Printf("处理MCP请求失败: %v", err)
+			s.sendErrorResponse(task.writer, "", -32603, fmt.Sprintf("处理请求失败: %v", err))
+			return
+		}
+		
+		// 写入响应
+		if err := s.writeResponse(task.writer, response); err != nil {
+			logging.Logger.Printf("写入标准输出失败: %v", err)
+		}
+	}
+}
+
+// writeResponse 写入响应到标准输出
+func (s *Server) writeResponse(writer *bufio.Writer, response []byte) error {
+	// 写入响应数据
+	if _, err := writer.Write(response); err != nil {
+		return fmt.Errorf("写入响应数据失败: %w", err)
+	}
+	
+	// 写入换行符
+	if err := writer.WriteByte('\n'); err != nil {
+		return fmt.Errorf("写入换行符失败: %w", err)
+	}
+	
+	// 刷新缓冲区
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("刷新缓冲区失败: %w", err)
+	}
+	
+	return nil
+}
+
+// sendErrorResponse 发送错误响应
+func (s *Server) sendErrorResponse(writer *bufio.Writer, id string, code int, message string) {
+	errResp := mcp.NewErrorResponse(id, code, message)
+	response, err := json.Marshal(errResp)
+	if err != nil {
+		logging.Logger.Printf("序列化错误响应失败: %v", err)
+		return
+	}
+	
+	if err := s.writeResponse(writer, response); err != nil {
+		logging.Logger.Printf("发送错误响应失败: %v", err)
+	}
 }
 
 // handleMCPRequest 处理MCP请求
 func (s *Server) handleMCPRequest(data []byte) ([]byte, error) {
+	// 记录请求开始时间
+	startTime := time.Now()
+	
+	// 解析请求
 	var request mcp.MCPRequest
 	if err := json.Unmarshal(data, &request); err != nil {
+		logging.Logger.Printf("解析MCP请求失败: %v, 数据: %s", err, string(data))
 		errResp := mcp.NewErrorResponse("", -32700, "解析请求失败")
 		return json.Marshal(errResp)
 	}
-
+	
+	// 记录请求信息
+	logging.Logger.Printf("收到MCP请求: ID=%s, Method=%s", request.ID, request.Method)
+	
+	// 验证请求格式
+	if request.JSONRPC != "2.0" {
+		logging.Logger.Printf("不支持的JSON-RPC版本: %s", request.JSONRPC)
+		errResp := mcp.NewErrorResponse(request.ID, -32600, "不支持的JSON-RPC版本")
+		return json.Marshal(errResp)
+	}
+	
 	// 只处理工具调用
 	if request.Method != "toolCall" {
+		logging.Logger.Printf("不支持的方法: %s", request.Method)
 		errResp := mcp.NewErrorResponse(request.ID, -32601, "不支持的方法")
 		return json.Marshal(errResp)
 	}
-
+	
 	// 解析工具调用参数
 	toolParams, err := mcp.ParseToolCallParams(request.Params)
 	if err != nil {
+		logging.Logger.Printf("解析工具调用参数失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.ID, -32602, fmt.Sprintf("无效的参数: %v", err))
 		return json.Marshal(errResp)
 	}
-
+	
+	// 记录工具调用信息
+	logging.Logger.Printf("工具调用: %s, 参数: %+v", toolParams.Name, toolParams.Parameters)
+	
 	// 处理请求
 	result, err := s.handler.HandleRequest(toolParams)
 	if err != nil {
+		logging.Logger.Printf("处理工具调用失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.ID, -32603, fmt.Sprintf("内部错误: %v", err))
 		return json.Marshal(errResp)
 	}
-
+	
 	// 创建成功响应
 	response, err := mcp.NewSuccessResponse(request.ID, result)
 	if err != nil {
+		logging.Logger.Printf("创建成功响应失败: %v", err)
 		errResp := mcp.NewErrorResponse(request.ID, -32603, fmt.Sprintf("创建响应失败: %v", err))
 		return json.Marshal(errResp)
 	}
-
-	return json.Marshal(response)
+	
+	// 序列化响应
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		logging.Logger.Printf("序列化响应失败: %v", err)
+		errResp := mcp.NewErrorResponse(request.ID, -32603, fmt.Sprintf("序列化响应失败: %v", err))
+		return json.Marshal(errResp)
+	}
+	
+	// 记录处理时间
+	duration := time.Since(startTime)
+	logging.Logger.Printf("MCP请求处理完成: ID=%s, 耗时=%v", request.ID, duration)
+	
+	return responseBytes, nil
 }
