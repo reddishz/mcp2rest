@@ -35,11 +35,11 @@ type Server struct {
 
 // SSEConnection SSE连接
 type SSEConnection struct {
-	ID       string
-	Writer   http.ResponseWriter
-	Flusher  http.Flusher
-	Context  context.Context
-	Cancel   context.CancelFunc
+	ID         string
+	Writer     http.ResponseWriter
+	Flusher    http.Flusher
+	Context    context.Context
+	Cancel     context.CancelFunc
 	RemoteAddr string
 }
 
@@ -55,12 +55,12 @@ func NewServer(cfg *config.Config, spec *config.OpenAPISpec) (*Server, error) {
 	}
 
 	return &Server{
-		config:      cfg,
-		openAPISpec: spec,
-		handler:     reqHandler,
-		ctx:         ctx,
-		cancel:      cancel,
-		done:        make(chan struct{}),
+		config:         cfg,
+		openAPISpec:    spec,
+		handler:        reqHandler,
+		ctx:            ctx,
+		cancel:         cancel,
+		done:           make(chan struct{}),
 		sseConnections: make(map[string]*SSEConnection),
 	}, nil
 }
@@ -146,10 +146,10 @@ func getServerName(mode string) string {
 // startSSEServer 启动SSE服务器
 func (s *Server) startSSEServer() error {
 	mux := http.NewServeMux()
-	
+
 	// 分离端点：SSE 连接和消息处理
-	mux.HandleFunc("/sse", s.handleSSEConnection)  // GET: 建立 SSE 连接
-	mux.HandleFunc("/api", s.handleSSEMessage)     // POST: 处理 MCP 消息
+	mux.HandleFunc("/sse", s.handleSSEConnection) // GET: 建立 SSE 连接
+	mux.HandleFunc("/api", s.handleSSEMessage)    // POST: 处理 MCP 消息
 
 	addr := fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port)
 	s.httpServer = &http.Server{
@@ -187,10 +187,10 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
 
 	// 创建客户端连接标识
 	clientID := fmt.Sprintf("%s-%d", r.RemoteAddr, time.Now().UnixNano())
-	
+
 	// 创建连接上下文
 	connCtx, connCancel := context.WithCancel(r.Context())
-	
+
 	// 创建SSE连接
 	conn := &SSEConnection{
 		ID:         clientID,
@@ -221,30 +221,23 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "data: {\"type\":\"connected\",\"message\":\"SSE连接已建立\",\"clientId\":\"%s\"}\n\n", clientID)
 	flusher.Flush()
 
-	// 使用 goroutine 处理长连接，避免阻塞
-	go s.handleSSELongConnection(clientID, conn)
-
-	// 立即返回，不阻塞 HTTP 服务器
-}
-
-// handleSSELongConnection 在 goroutine 中处理 SSE 长连接
-func (s *Server) handleSSELongConnection(clientID string, conn *SSEConnection) {
-	defer s.removeSSEConnection(clientID)
-
-	// 保持连接活跃
+	// 保持连接活跃 - 在 HTTP 处理函数中处理，不立即返回
+	// 这样可以确保 HTTP 连接保持开放
 	for {
 		select {
 		case <-s.ctx.Done():
 			logging.Logger.Printf("服务器关闭，SSE连接关闭: %s", clientID)
+			s.removeSSEConnection(clientID)
 			return
-		case <-conn.Context.Done():
+		case <-connCtx.Done():
 			logging.Logger.Printf("客户端断开连接: %s", clientID)
+			s.removeSSEConnection(clientID)
 			return
 		case <-time.After(30 * time.Second):
 			// 每30秒发送一次心跳，保持连接活跃
 			s.sseMutex.RLock()
 			if currentConn, exists := s.sseConnections[clientID]; exists {
-				fmt.Fprintf(currentConn.Writer, "data: {\"type\":\"heartbeat\",\"timestamp\":\"%s\",\"clientId\":\"%s\"}\n\n", 
+				fmt.Fprintf(currentConn.Writer, "data: {\"type\":\"heartbeat\",\"timestamp\":\"%s\",\"clientId\":\"%s\"}\n\n",
 					time.Now().Format(time.RFC3339), clientID)
 				currentConn.Flusher.Flush()
 			}
@@ -252,6 +245,8 @@ func (s *Server) handleSSELongConnection(clientID string, conn *SSEConnection) {
 		}
 	}
 }
+
+
 
 // handleSSEMessage 处理SSE消息 (POST /api)
 func (s *Server) handleSSEMessage(w http.ResponseWriter, r *http.Request) {
@@ -311,7 +306,7 @@ func (s *Server) handleSSEMessage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeSSEConnection(clientID string) {
 	s.sseMutex.Lock()
 	defer s.sseMutex.Unlock()
-	
+
 	if conn, exists := s.sseConnections[clientID]; exists {
 		conn.Cancel()
 		delete(s.sseConnections, clientID)

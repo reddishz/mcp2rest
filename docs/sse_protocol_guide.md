@@ -110,7 +110,7 @@ data: {"type":"heartbeat","timestamp":"2024-01-01T12:00:00Z","clientId":"127.0.0
 
 ### 非阻塞设计
 
-- **GET /sse**：立即返回，长连接在 goroutine 中处理
+- **GET /sse**：在 HTTP 处理函数中保持连接活跃，确保连接不关闭
 - **POST /api**：独立的端点，不受 SSE 连接影响
 - **并发支持**：可以同时处理多个连接和消息
 
@@ -174,16 +174,28 @@ func (s *Server) startSSEServer() error {
     // ... 服务器配置
 }
 
-// 非阻塞的 SSE 连接处理
+// SSE 连接处理 - 在 HTTP 处理函数中保持连接活跃
 func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request) {
     // 设置 SSE 头
     // 创建连接
     // 注册到连接池
     
-    // 使用 goroutine 处理长连接，避免阻塞
-    go s.handleSSELongConnection(clientID, conn)
+    // 发送连接确认消息
+    fmt.Fprintf(w, "data: {...}\n\n")
+    flusher.Flush()
     
-    // 立即返回，不阻塞 HTTP 服务器
+    // 在 HTTP 处理函数中保持连接活跃
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-time.After(30 * time.Second):
+            // 发送心跳
+            fmt.Fprintf(w, "data: {...}\n\n")
+            flusher.Flush()
+        }
+    }
+    // 注意：不能在这里返回，否则连接会关闭
 }
 
 // 独立的消息处理
